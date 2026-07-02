@@ -29,7 +29,26 @@ pip install -r "requirements(python3.10).txt"
 
 ---
 
-## 발표된 논문 (2025 한국섬유공학회지) / Published papers
+## I. Solid mesh의 최적 배치
+
+이 프로젝트는 얇은 쉘(shell) 메쉬뿐 아니라 **일반적인 닫힌(solid, watertight) 메쉬도 지원**합니다.
+`TSE_TomoSh1.py`는 입력 메쉬의 watertight 여부로 `bShellMesh`를 자동 판정하므로,
+solid 메쉬를 넣으면 별도 설정 없이 같은 파이프라인으로 최적 프린팅 배향을 탐색합니다.
+아래는 Stanford Bunny(`MeshData/Bunny_69k.stl`, 약 69k 삼각형)의 예입니다
+(재현: `.\pics\regen_pics.ps1 solid1`).
+
+![solid1](pics/tomo_solid1.png)
+
+solid mesh 최적 배향(TomoNV) 관련 참고문헌:
+
+1. Jin Young Jung, Seonkoo Chee and In Hwan Sul, "Automatic Segmentation and 3D Printing of A-shaped Manikins using a Bounding Box and Body-feature Points", *Fashion and Textiles*, 8(13), pp.1-21, (2021) <a href="https://dx.doi.org/10.1186/s40691-021-00255-8" target="_blank" rel="noopener">doi:10.1186/s40691-021-00255-8</a>
+2. Jin Young Jung, Seonkoo Chee, and In Hwan Sul, "Support structure tomography using per-pixel signed shadow casting in human manikin 3D printing", *Fashion and Textiles*, (2022) <a href="https://dx.doi.org/10.1186/s40691-022-00290-z" target="_blank" rel="noopener">doi:10.1186/s40691-022-00290-z</a>
+3. Jin Young Jung, Seonkoo Chee, and In Hwan Sul, "Prediction of optimal 3D printing orientation using vertically sparse voxelization and modified support structure tomography", *International Journal of Clothing Science and Technology*, 35(5), pp.799-832, (2023) <a href="https://dx.doi.org/10.1108/IJCST-04-2023-0041" target="_blank" rel="noopener">doi:10.1108/IJCST-04-2023-0041</a>
+4. Jae Ryoung Kim and In Hwan Sul, "Fast Prediction of 3D Printing Optimal Orientation Using General-Purpose Graphic Card Unit Calculation", *3D Printing and Additive Manufacturing*, 13(1), pp.50-62, (2026) <a href="https://dx.doi.org/10.1089/3dp.2024.0165" target="_blank" rel="noopener">doi:10.1089/3dp.2024.0165</a>
+
+---
+
+## II. Shell 메쉬의 최적 배치 및 분할 — 발표된 논문 (2025 한국섬유공학회지) / Published papers
 
 ### `TSE_TomoSh1.py` — 얇은 쉘 구조 마네킨 메쉬의 3D프린팅 필라멘트 소모량 예측
 Filament Usage Prediction in 3D Printing of Thin-Shell-Structured Manikin Mesh

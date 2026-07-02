@@ -2,7 +2,7 @@
 
 #include "pch.h"
 #include "framework.h"
-#include "Tomo_Shell2025.h"
+#include "Tomo_Shell2026.h"
 #include "cpu_src\SMatrix4f.h"
 #include "cpu_src\STomoPixel.h"
 #include "cpu_src\STPSlot.h"
@@ -36,20 +36,20 @@ TPVector al_pxls, be_pxls, TC_pxls, NVB_pxls, NVA_pxls, Vo_pxls, Vss_pxls, SS_px
 
 using namespace Tomo;
 
-inline FLOAT32 toRadian(INT16 a) { return a * 3.141592 / 180.; }
+inline FLOAT32 toRadian(INT16 a) { return static_cast<FLOAT32>(a * 3.141592 / 180.); }
 
 FLOAT32* identity4x4(void)
 {
 	FLOAT32 *mat = new FLOAT32[4*4];
 	memset(mat, 0x00, sizeof(FLOAT32) * 16);
-	mat[0] = mat[4] = mat[8] = mat[12] = 1.;
+	mat[0] = mat[4] = mat[8] = mat[15] = 1.;
 	return mat;
 }
 
 
 INT16* pxlsToDat2i(TPVector& pxls, MESH_ELE_ID_TYPE& n_pxl)
 {
-	n_pxl = pxls.size();
+	n_pxl = static_cast<MESH_ELE_ID_TYPE>(pxls.size());
 	if(n_pxl<=0) return nullptr;
 
 	INT16* _Data2i = new INT16[n_pxl * g_nPixelFormat];
@@ -153,17 +153,24 @@ MESH_ELE_ID_TYPE  _TomoSh_Function_Call(
 	Vtc = new FLOAT32[info.nYPR + 2];
 
 	//mult-thread info.
-	const auto processor_count = std::thread::hardware_concurrency();
-	int nThread = min(processor_count, info.nYPR);
+	const unsigned int processor_count_raw = std::thread::hardware_concurrency();
+	const int processor_count = processor_count_raw == 0 ? 1 : static_cast<int>(processor_count_raw);
+	const int nYPRCount = static_cast<int>(info.nYPR);
+	int nThread = processor_count;
+	if (nYPRCount < nThread) { nThread = nYPRCount; }
 	char* envCpuThreads = nullptr;
 	size_t envCpuThreadsLen = 0;
 	if (_dupenv_s(&envCpuThreads, &envCpuThreadsLen, "TOMO_CPU_THREADS") == 0 && envCpuThreads != nullptr) {
 		const int forcedCpuThreads = std::atoi(envCpuThreads);
-		if (forcedCpuThreads > 0) { nThread = min(forcedCpuThreads, info.nYPR); }
+		if (forcedCpuThreads > 0) {
+			nThread = forcedCpuThreads;
+			if (nYPRCount < nThread) { nThread = nYPRCount; }
+		}
 		free(envCpuThreads);
 	}
-	int nBlock = info.nYPR / nThread;
-	int nBlRest = info.nYPR % nThread;
+	if (nThread < 1) { nThread = 1; }
+	int nBlock = nYPRCount / nThread;
+	int nBlRest = nYPRCount % nThread;
 
 		T *pNV = new T[nThread +2];
 
@@ -208,8 +215,8 @@ MESH_ELE_ID_TYPE  _TomoSh_Function_Call(
 
 #endif
 
-	MESH_ELE_ID_TYPE  optID =  _find1stOptimal( info.nYPR, Mss);
-	if( info.nYPR >1)  thread_func<T>(pNV, 0, _YPR, optID);//Find information of optID again.
+	MESH_ELE_ID_TYPE  optID =  _find1stOptimal(static_cast<MESH_ELE_ID_TYPE>(nYPRCount), Mss);
+	if(nYPRCount > 1)  thread_func<T>(pNV, 0, _YPR, optID);//Find information of optID again.
 
 	//prepare rendering data for python
 	::nData2i = new MESH_ELE_ID_TYPE[g_nPixelType];
@@ -325,7 +332,7 @@ MESH_ELE_ID_TYPE  TomoSh_CUDA(FLOAT32* _float32_info_x12, MESH_ELE_ID_TYPE* _int
 
 	P_info.Set(_float32_info_x12, _int32_info_x11, _tri, _vtx, _vtx_nrm, _tri_nrm, _chull_tri, _chull_vtx, _chull_trinrm, 0, 0, 0);//input mesh data. takes some memory.
 
-	MESH_ELE_ID_TYPE nYPR = P_info.nYPR;
+	MESH_ELE_ID_TYPE nYPR = static_cast<MESH_ELE_ID_TYPE>(P_info.nYPR);
 	int   nCHullVtx = P_info.nCHull_Vtx;
 
 	Mss = new FLOAT32[nYPR + 2];

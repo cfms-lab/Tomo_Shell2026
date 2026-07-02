@@ -1,0 +1,32 @@
+[project]
+name = "tomo-shell2026-dev"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "graphviz==0.20.3",
+    "httpx==0.28.1",
+    "joblib==1.4.2",
+    "mapbox-earcut==1.0.1",
+    "matplotlib==3.8.4",
+    "meshlib==3.1.3.249",
+    "networkx==3.2.1",
+    "numpy==1.26.4",
+    "opencv-python==4.9.0.80",
+    "pillow==10.3.0",
+    "plotly==5.22.0",
+    "polyscope==2.6.1",
+    "potpourri3d==1.2.1",
+    "pygltflib==1.16.0",
+    "pyglm==2.7.1",
+    "pydot==4.0.0",
+    "recordtype==1.4",
+    "rtree==1.2.0",
+    "scikit-learn-extra==0.3.0",
+    "scikit-learn==1.4.2",
+    "scipy==1.11.4",
+    "shapely==2.0.4",
+    "threadpoolctl==3.5.0",
+    "trimesh==4.4.0",
+]

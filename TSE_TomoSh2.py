@@ -109,5 +109,49 @@ batch.GetMss()
 batch.add_to(polyscope)
 
 # (3). final rendering
+save_path = os.environ.get("TOMO_SCREENSHOT", "").strip()
+if save_path:
+	os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+	try:
+		polyscope.set_window_size(
+			int(os.environ.get("TOMO_SCREENSHOT_W", "1920")),
+			int(os.environ.get("TOMO_SCREENSHOT_H", "768")),
+		)
+	except Exception:
+		pass
+	bounds = np.array([
+		np.minimum(avatar.tmesh.bounds[0], batch.bounds[0]),
+		np.maximum(avatar.tmesh.bounds[1], batch.bounds[1]),
+	])
+	center = bounds.mean(axis=0)
+	span = float(np.linalg.norm(bounds[1] - bounds[0]))
+	camera_distance = float(os.environ.get("TOMO_CAMERA_DISTANCE", "2.6"))
+	camera_z_offset = float(os.environ.get("TOMO_CAMERA_Z_OFFSET", "0.04"))
+	camera_view = os.environ.get("TOMO_CAMERA_VIEW", "front").strip().lower()
+	camera_views = {
+		"front": np.array([1., 0., 0.]),
+		"back": np.array([-1., 0., 0.]),
+		"left": np.array([0., -1., 0.]),
+		"right": np.array([0., 1., 0.]),
+		"side": np.array([0., -1., 0.]),
+	}
+	camera_direction = camera_views.get(camera_view, camera_views["front"])
+	camera_direction = camera_direction / np.linalg.norm(camera_direction)
+	camera_up = np.array([0., 0., 1.])
+	camera_right = np.cross(camera_up, camera_direction)
+	camera_right = camera_right / np.linalg.norm(camera_right)
+	camera_shift = float(os.environ.get("TOMO_CAMERA_SHIFT", "1.6"))
+	camera_target = center + camera_right * camera_shift * span
+	camera_position = camera_target + camera_direction * camera_distance * span + camera_up * camera_z_offset * span
+	polyscope.set_ground_plane_mode(os.environ.get("TOMO_GROUND_PLANE", "none"))
+	polyscope.set_view_projection_mode("orthographic")
+	polyscope.look_at(
+		(float(camera_position[0]), float(camera_position[1]), float(camera_position[2])),
+		(float(camera_target[0]), float(camera_target[1]), float(camera_target[2])),
+	)
+	polyscope.set_SSAA_factor(int(os.environ.get("TOMO_SSAA", "3")))
+	polyscope.screenshot(save_path, transparent_bg=False)
+	print("wrote", save_path)
+
 if os.environ.get("TOMO_NO_SHOW", "0").lower() not in ("1", "true", "yes", "on"):
 	polyscope.show()

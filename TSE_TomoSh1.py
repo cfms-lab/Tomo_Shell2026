@@ -23,6 +23,11 @@ import os
 DataSet= [ ('MeshData/(6)bodice1.ply', 0, 0., 0)]
 #DataSet= [ ('MeshData/(7)bodice5.ply', 0, 0, 0)]#bodice worst
 
+# 환경변수로 입력 메쉬 교체 가능 (예: solid mesh 예제 pics/tomo_solid1.png 재생성용. pics/regen_pics.ps1 참조)
+_mesh_override = os.environ.get("TOMO_MESH_FILE", "").strip()
+if _mesh_override:
+	DataSet = [ (_mesh_override, 0, 0., 0)]
+
 theta_YP = 0 #type 1). seeing a specific orientation.
 theta_YP = 5 #type #2). search among multiple orientations and find the optimal one, with search step 360/N (N=integer)
 #========================================================================================================================
@@ -72,7 +77,7 @@ for Data in DataSet:
 		#-----------------------------------------------
 		# (3) Rendering
 
-		if tomoSh_Cpp1.bVerbose:
+		if tomoSh_Cpp1.bVerbose and os.environ.get("TOMO_NO_SHOW", "0").lower() not in ("1", "true", "yes", "on"):
 			Plot3DPixels(tomoSh_Cpp1) #show pixels of the 1st optimal
 			#print( tomoSh_Cpp1.Mtotal3D)
 			#PrintSlotInfo( tomoSh_Cpp1, X=33,Y=38)

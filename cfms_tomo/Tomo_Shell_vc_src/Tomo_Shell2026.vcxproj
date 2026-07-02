@@ -57,7 +57,7 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.3.props" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.2.props" />
   </ImportGroup>
   <ImportGroup Label="Shared">
   </ImportGroup>
@@ -76,23 +76,23 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
-    <TargetName>TomoNVC_Win32</TargetName>
-    <OutDir>D:\OneDrive\Documents\__PaperWorks\__InProgress\__Manikin_TomoNV_2022\_PythonCode\fromGITHUB\tomoNVdebug</OutDir>
+    <TargetName>Tomo_Shell2026_Win32</TargetName>
+    <OutDir>.\Win32\Debug\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
-    <TargetName>TomoNVC_Win32</TargetName>
-    <OutDir>D:\OneDrive\Documents\__PaperWorks\__InProgress\__Manikin_TomoNV_2022\_PythonCode\fromGITHUB\tomoNVdebug</OutDir>
+    <TargetName>Tomo_Shell2026_Win32</TargetName>
+    <OutDir>.\Win32\Release\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <TargetName>Tomo_Shell2026</TargetName>
-    <OutDir>.\Tomo_python</OutDir>
+    <OutDir>..\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
     <TargetName>Tomo_Shell2026</TargetName>
-    <OutDir>.</OutDir>
+    <OutDir>..\</OutDir>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <VcpkgUseStatic>true</VcpkgUseStatic>
@@ -244,8 +244,7 @@
     <ClInclude Include="cuda_src\CUDA_types.cuh" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="cuda_src\SlotData.cuh" />
-    <ClInclude Include="STomoPixel.h" />
-    <ClInclude Include="Tomo_Shell2025.h" />
+    <ClInclude Include="Tomo_Shell2026.h" />
     <ClInclude Include="Tomo_types.h" />
   </ItemGroup>
   <ItemGroup>
@@ -271,7 +270,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="Tomo_Shell2025.cpp" />
+    <ClCompile Include="Tomo_Shell2026.cpp" />
     <ClCompile Include="Tomo_types.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -287,6 +286,6 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.3.targets" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 13.2.targets" />
   </ImportGroup>
 </Project>

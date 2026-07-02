@@ -511,7 +511,17 @@ def Plot3D(mesh0, yaw_range, pitch_range, value_data, optimals=[], worsts=[]):
 		path0 = os.path.dirname(os.path.abspath(g_input_mesh_filename))
 		fig_name = os.path.basename(g_input_mesh_filename).replace( ".", "_")
 		# fig.savefig( path0 + "\\" + fig_name + "_step" + str(int(toDegree(yaw_range[1]+g_fMARGIN))) + ".png", dpi=200)
-	plt.show()
+	save_path = os.environ.get("TOMO_PLOT3D_SAVE", "").strip()
+	if save_path:
+		save_dir = os.path.dirname(os.path.abspath(save_path))
+		if save_dir:
+			os.makedirs(save_dir, exist_ok=True)
+		fig.savefig(save_path, dpi=int(os.environ.get("TOMO_PLOT3D_DPI", "100")))
+		print("wrote", save_path)
+	if os.environ.get("TOMO_NO_SHOW", "0").lower() not in ("1", "true", "yes", "on"):
+		plt.show()
+	else:
+		plt.close(fig)
 
 #--------------------------------------------------------------
 #mesh I/O

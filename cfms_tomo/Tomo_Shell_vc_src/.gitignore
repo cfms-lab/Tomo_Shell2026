@@ -3,6 +3,11 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+Tomo_Shell*.dll
+Tomo_Shell*.exp
+Tomo_Shell*.lib
+Tomo_python/
+
 # User-specific files
 *.rsuser
 *.suo
@@ -38,7 +43,7 @@ bld/
 #wwwroot/
 
 # Visual Studio 2017 auto generated files
-Generated\ Files/
+Generated Files/
 
 # MSTest test Results
 [Tt]est[Rr]esult*/
