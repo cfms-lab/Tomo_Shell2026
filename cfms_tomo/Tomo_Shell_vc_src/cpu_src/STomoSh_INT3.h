@@ -51,7 +51,8 @@ public:
     size_t  matchPairNumber_SS( const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, int nvb_type_byte, int be_type_byte);
 
     size_t countType(           const size_t S_W, const size_t S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, int typeByte = 0xff);
-    SLOT_BUFFER_TYPE sumType(       const size_t S_W, const size_t S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, int typeByte = 0xff);
+    SLOT_SUM_TYPE sumType(          const size_t S_W, const size_t S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, int typeByte = 0xff);
+    VOXEL_ID_TYPE slotIDFromPtr(    const size_t S_W, SLOT_BUFFER_TYPE* curr_Pxl_slot) const;
     void  removeZNearPxls(      const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, int typeByte);
     void  sortSlotByZ(          const size_t S_W, const SLOT_BUFFER_TYPE S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot);
     SLOT_BUFFER_TYPE erasePxl(  const size_t S_W, const size_t S_L, int p_id, SLOT_BUFFER_TYPE* curr_Pxl_slot);

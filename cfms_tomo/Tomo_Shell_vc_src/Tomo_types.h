@@ -30,7 +30,8 @@ namespace Tomo
 
   //CPU version TomoNV types
   typedef long int      VOXEL_ID_TYPE;//4 byte. https://docs.microsoft.com/ko-kr/cpp/cpp/data-type-ranges?view=msvc-170
-  typedef short int     SLOT_BUFFER_TYPE;//cpu version. 2byte, [-32,767~32,767]
+  typedef short int     SLOT_BUFFER_TYPE;//cpu pixel storage. 2byte, [-32,767~32,767]
+  typedef int           SLOT_SUM_TYPE;//cpu per-slot volume accumulator. 4byte.
   typedef unsigned int  BIT_BUFFER_TYPE;//4byte. [0~4,294,967,295]
 
 

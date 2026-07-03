@@ -35,8 +35,11 @@ public:
   //mem size: https://docs.microsoft.com/ko-kr/cpp/cpp/data-type-ranges?view=msvc-170
   //unsigned int = 4byte,  , SLOT_BUFFER_TYPE = 1 byte
   //const int nSlotBufMaxHeight = 36;//max. ray-mesh intersection number. assumption.
-  //const int nSlotBufWidth = 3;// 0th element is ( nPxl ,Vo, Vss), and then list of (Z, nZ * nNORMALFACTOR, type),..  0 <= nPxl <= nMaxZDepth-1.
+  //const int nSlotBufWidth = 3;// 0th row stores nPxl only; Vo/Vss sums are int32 side buffers.
   SLOT_BUFFER_TYPE* SlotBuf_108f;//3*8 bits  for voxel,  3 bytes * X_D * Y_D * nMaxZDepth. 비어 있지 않은 픽셀값만 모아서 저장.
+
+  SLOT_SUM_TYPE* SlotVo_32i;
+  SLOT_SUM_TYPE* SlotVss_32i;
   void  InitSlotBuf(void);
 
   void  SetBit_Type(SLOT_BUFFER_TYPE* slot_buf, unsigned int _ID, unsigned int slotXYZ[3],

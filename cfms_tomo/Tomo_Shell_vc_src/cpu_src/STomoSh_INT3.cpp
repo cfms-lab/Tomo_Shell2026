@@ -7,6 +7,13 @@
 
 using namespace Tomo;
 
+static SLOT_BUFFER_TYPE clampSlotSumToBuffer(SLOT_SUM_TYPE value)
+{
+  if (value > 32767) return SLOT_BUFFER_TYPE(32767);
+  if (value < -32768) return SLOT_BUFFER_TYPE(-32768);
+  return SLOT_BUFFER_TYPE(value);
+}
+
 static bool tomoDebugSlotInputEnabled()
 {
   char* env = nullptr;
@@ -138,9 +145,9 @@ static void tomoDebugPrintCpuPairOutput(const STomoSh_INT3* tomo)
   long long voSum = 0, vssSum = 0, nonzeroVo = 0, nonzeroVss = 0;
   for (int slotX = 0; slotX < X_D; slotX++) {
     for (int slotY = 0; slotY < Y_D; slotY++) {
-      SLOT_BUFFER_TYPE* slot = tomo->voxel_info.SlotBuf_108f + (slotX * Y_D + slotY) * S_W * S_H;
-      int vo = slot[1];
-      int vss = slot[2];
+      int slotID = slotX * Y_D + slotY;
+      SLOT_SUM_TYPE vo = tomo->voxel_info.SlotVo_32i[slotID];
+      SLOT_SUM_TYPE vss = tomo->voxel_info.SlotVss_32i[slotID];
       voSum += vo;
       vssSum += vss;
       if (vo != 0) nonzeroVo++;
@@ -161,8 +168,8 @@ static void tomoDebugPrintCpuPairOutput(const STomoSh_INT3* tomo)
           int slotID = slotX * Y_D + slotY;
           SLOT_BUFFER_TYPE* slot = tomo->voxel_info.SlotBuf_108f + slotID * S_W * S_H;
           int S_L = slot[0];
-          int vo = slot[1];
-          int vss = slot[2];
+          SLOT_SUM_TYPE vo = tomo->voxel_info.SlotVo_32i[slotID];
+          SLOT_SUM_TYPE vss = tomo->voxel_info.SlotVss_32i[slotID];
           std::fprintf(fp, "%d,%d,%d,%d,%d,%d,-1,0,0,0\n", slotID, slotX, slotY, S_L, vo, vss);
           for (int p = 0; p < S_L; p++) {
             const int typ = slot[(p + 1) * S_W + 0];
@@ -217,6 +224,11 @@ void	STomoSh_INT3::Init(void)
 {
   STomoSh_Base::Init();
   voxel_info.Init();
+}
+
+VOXEL_ID_TYPE STomoSh_INT3::slotIDFromPtr(const size_t S_W, SLOT_BUFFER_TYPE* curr_Pxl_slot) const
+{
+  return VOXEL_ID_TYPE((curr_Pxl_slot - voxel_info.SlotBuf_108f) / (S_W * voxel_info.nSlotCapacityHeight));
 }
 
 void  STomoSh_INT3::Rotate(void)
@@ -612,11 +624,11 @@ size_t STomoSh_INT3::countType(const size_t S_W/*slot width, always 3*/,
   return n_type;
 }
 
-SLOT_BUFFER_TYPE STomoSh_INT3::sumType(const size_t S_W/*slot width, always 3*/,
+SLOT_SUM_TYPE STomoSh_INT3::sumType(const size_t S_W/*slot width, always 3*/,
   const size_t S_L/*slot length. n_pixels_in_curr_slot*/,
   SLOT_BUFFER_TYPE* curr_Pxl_slot, int _typeByte)
 {
-  SLOT_BUFFER_TYPE sum_type = 0;
+  SLOT_SUM_TYPE sum_type = 0;
   for (int p = 0; p < S_L; p++)
   {
     SLOT_BUFFER_TYPE p_type = *(curr_Pxl_slot + (p + 1) * S_W + 0);
@@ -725,14 +737,23 @@ void  STomoSh_INT3::createShadowBriefly(
 
   if (bExplicitPairStarted)//못 찾았으면 바닥을 NVA로 지정.
   {
-     *(curr_Pxl_slot + (S_L + 1) * S_W + 0) |=typeSSA; //빈 슬롯에 0을 넣고.
-     S_L++;//슬롯 크기를 증가.
+  //Note: the floor sentinel has z=0, so skipping it when the slot is full does not
+  //change the Vss sums; writing past the slot end would corrupt the next slot's
+  //header (count |= typeSSA/typeNVA), which is what broke dense meshes (mss=0).
+    if (S_L < voxel_info.nSlotCapacityHeight - 1)
+    {
+       *(curr_Pxl_slot + (S_L + 1) * S_W + 0) |=typeSSA; //빈 슬롯에 0을 넣고.
+       S_L++;//슬롯 크기를 증가.
+    }
      bExplicitPairStarted = false;
   }
   if (bImplicitPairStarted)//못 찾았으면 바닥을 NVA로 지정.
   {
-    *(curr_Pxl_slot + (S_L + 1) * S_W + 0) |= typeNVA;
-    S_L++;//슬롯 크기를 증가.
+    if (S_L < voxel_info.nSlotCapacityHeight - 1)
+    {
+      *(curr_Pxl_slot + (S_L + 1) * S_W + 0) |= typeNVA;
+      S_L++;//슬롯 크기를 증가.
+    }
     bImplicitPairStarted = false;
   }
 
@@ -864,11 +885,11 @@ void  STomoSh_INT3::createVoPixels(
   SLOT_BUFFER_TYPE* curr_Pxl_slot)
 {//calculate Vo value from (al - be), and insert a pixel.
   //(Al - Be)를 통해 Vo값을 계산하고, 렌더링을 위해 슬롯에 픽셀을 추가한다.
-  SLOT_BUFFER_TYPE al_sum = 0, be_sum = 0;
+  SLOT_SUM_TYPE al_sum = 0, be_sum = 0;
   for (int p = 0; p < S_L ; p++)
   {
     SLOT_BUFFER_TYPE p_type = *(curr_Pxl_slot + (p + 1) * S_W + 0);
-    SLOT_BUFFER_TYPE p_z = *(curr_Pxl_slot + (p + 1) * S_W + 1);
+    SLOT_SUM_TYPE p_z = *(curr_Pxl_slot + (p + 1) * S_W + 1);
     if (p_type & typeAl)
     {
       al_sum += p_z;
@@ -879,11 +900,11 @@ void  STomoSh_INT3::createVoPixels(
     }
   }
 
-  SLOT_BUFFER_TYPE Vo_z = max(al_sum - be_sum, 0);//가끔 노이즈로 인해 마이너스 값이 나올 수 있다.
+  SLOT_SUM_TYPE Vo_z = (al_sum > be_sum) ? (al_sum - be_sum) : 0;//가끔 노이즈로 인해 마이너스 값이 나올 수 있다.
 #ifndef _USE_BRIEF_SLOT_PAIRING
-  insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::espVo), _round(Vo_z), 0);
+  insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::eptVo), clampSlotSumToBuffer(Vo_z), 0);
 #endif
-  * (curr_Pxl_slot + 1) = Vo_z;
+  voxel_info.SlotVo_32i[slotIDFromPtr(S_W, curr_Pxl_slot)] = Vo_z;
 }
 
 void  STomoSh_INT3::createVss_Explicit(
@@ -893,23 +914,23 @@ void  STomoSh_INT3::createVss_Explicit(
 {//calculate Vss value from (ssb - ssa). and insert a pixel
   //(SSB - SSA)를 통해 SS값을 구하고, 렌더링을 위해 픽셀을 추가한다.
 
-  SLOT_BUFFER_TYPE ssb_sum = 0, ssa_sum = 0;
+  SLOT_SUM_TYPE ssb_sum = 0, ssa_sum = 0;
 
   for (int p = 0; p < S_L; p++)
   {
     SLOT_BUFFER_TYPE p_type = *(curr_Pxl_slot + (p + 1) * S_W + 0);
-    SLOT_BUFFER_TYPE p_z    = *(curr_Pxl_slot + (p + 1) * S_W + 1);
+    SLOT_SUM_TYPE p_z       = *(curr_Pxl_slot + (p + 1) * S_W + 1);
     if (p_type & typeSSB)      {   ssb_sum += p_z;    }
     else if (p_type & typeSSA) {   ssa_sum += p_z;    }
   }
 
-  SLOT_BUFFER_TYPE Vss_z = ssb_sum - ssa_sum;
+  SLOT_SUM_TYPE Vss_z = ssb_sum - ssa_sum;
 #ifdef _USE_BRIEF_SLOT_PAIRING
  #else
   if (Vss_z != 0)//hide zero-height pixel, for pretty rendering
-  {  insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::espVss), Vss_z, 0); }
+  {  insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::eptVss), clampSlotSumToBuffer(Vss_z), 0); }
 #endif
-  * (curr_Pxl_slot + 2) = Vss_z;//합산을 위해 버퍼에 기록.
+  voxel_info.SlotVss_32i[slotIDFromPtr(S_W, curr_Pxl_slot)] = Vss_z;//합산을 위해 버퍼에 기록.
 
 }
 
@@ -919,13 +940,13 @@ void  STomoSh_INT3::createVss_Implicit(
   SLOT_BUFFER_TYPE* curr_Pxl_slot)
 { //calculate Vss value from (-al + be + TC - NVB + NBA). and insert a pixel
   //(-al + be + TC - NVB + NBA)를 통해 Vss값을 구하고, 렌더링을 위해 픽셀을 추가한다.
-  SLOT_BUFFER_TYPE al_sum = 0, be_sum = 0, TC_sum = 0, NVB_sum = 0, NVA_sum = 0;
+  SLOT_SUM_TYPE al_sum = 0, be_sum = 0, TC_sum = 0, NVB_sum = 0, NVA_sum = 0;
 
 
   for (int p = 0; p < S_L; p++)
   {
     SLOT_BUFFER_TYPE p_type = *(curr_Pxl_slot + (p + 1) * S_W + 0);
-    SLOT_BUFFER_TYPE p_z    = *(curr_Pxl_slot + (p + 1) * S_W + 1);
+    SLOT_SUM_TYPE p_z       = *(curr_Pxl_slot + (p + 1) * S_W + 1);
     if (p_type & typeAl)
     {
       al_sum += p_z;
@@ -939,16 +960,16 @@ void  STomoSh_INT3::createVss_Implicit(
     }
   }
 
-  SLOT_BUFFER_TYPE Vss_z = -al_sum + be_sum + TC_sum - NVB_sum + NVA_sum;
+  SLOT_SUM_TYPE Vss_z = -al_sum + be_sum + TC_sum - NVB_sum + NVA_sum;
 #ifdef _USE_BRIEF_SLOT_PAIRING
 #else
   if (Vss_z != 0)//hide zero-height pixel, for pretty rendering
   {
-    insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::espVss), Vss_z, 0);
+    insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::eptVss), clampSlotSumToBuffer(Vss_z), 0);
   }
 #endif
 
-  *(curr_Pxl_slot + 2) = Vss_z;//합산을 위해 버퍼에 기록.
+  voxel_info.SlotVss_32i[slotIDFromPtr(S_W, curr_Pxl_slot)] = Vss_z;//합산을 위해 버퍼에 기록.
 
 }
 
@@ -1152,11 +1173,12 @@ void  STomoSh_INT3::Calculate(void)
       }
       #endif
 
-      SLOT_BUFFER_TYPE* curr_Pxl_slot = voxel_info.SlotBuf_108f + (slotX * Y_D + slotY) * S_W * S_H;//current slot
+      VOXEL_ID_TYPE slotID = slotX * Y_D + slotY;
+      SLOT_BUFFER_TYPE* curr_Pxl_slot = voxel_info.SlotBuf_108f + slotID * S_W * S_H;//current slot
 
       SLOT_BUFFER_TYPE slot_len = *(curr_Pxl_slot + 0);
-      SLOT_BUFFER_TYPE slot_Vo  = *(curr_Pxl_slot + 1);
-      SLOT_BUFFER_TYPE slot_Vss = *(curr_Pxl_slot + 2);
+      SLOT_SUM_TYPE slot_Vo  = voxel_info.SlotVo_32i[slotID];
+      SLOT_SUM_TYPE slot_Vss = voxel_info.SlotVss_32i[slotID];
 
       vm_info.Vo  +=  slot_Vo;
       vm_info.Vss +=  slot_Vss;

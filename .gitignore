@@ -2,6 +2,19 @@
 __pycache__/
 _ref_codes/
 _tmp_validation_meshes/
+
+# Local Python environments and dependency-scan outputs
+uv/
+.venv/
+venv/
+env/
+ENV/
+requirements.clean.txt
+requirements_clean_report.txt
+used_imports.txt
+uv_installed*.txt
+tools/
+
 cfms_tomo/Tomo_Shell2025*
 cfms_tomo/Tomo_Shell_vc_src/Tomo_Shell2025*
 cfms_tomo/Tomo_Shell2026.exp
