@@ -75,18 +75,22 @@ void	SlotData::Malloc(int _nSlot)
 	{
 		#ifdef _CUDA_USE_SERIALIZED_SLOTDATA_MEMORY
 		CU_SLOT_BUFFER_TYPE *cu_buf = 0;
-		const size_t s_serial_data = s_nSlot + s_nSlotData * 3 + 2 * sizeof(CU_SLOT_BUFFER_TYPE);
+		const size_t s_serial_data = s_nSlot + s_nSlotData * 5 + 2 * sizeof(CU_SLOT_BUFFER_TYPE);
 		cudaMalloc( (void**)&cu_buf,	s_serial_data);	cudaCheckError();
 		cu_sNPxl	= cu_buf;
 		cu_sdType = cu_sNPxl + nSlot;
 		cu_sdZcrd = cu_sdType + nSlotData;
 		cu_sdZnrm = cu_sdZcrd + nSlotData;
-		cu_ReducedSum_Buffer = cu_sdZnrm + nSlotData;
+		cu_sdKey  = cu_sdZnrm + nSlotData;
+		cu_sdTri  = cu_sdKey + nSlotData;
+		cu_ReducedSum_Buffer = cu_sdTri + nSlotData;
 		#else
 		cudaMalloc((void**)&cu_sNPxl,		s_nSlot);				cudaCheckError();
 		cudaMalloc((void**)&cu_sdType,	s_nSlotData);		cudaCheckError();
 		cudaMalloc((void**)&cu_sdZcrd,	s_nSlotData);		cudaCheckError();
 		cudaMalloc((void**)&cu_sdZnrm,	s_nSlotData);		cudaCheckError();
+		cudaMalloc((void**)&cu_sdKey,		s_nSlotData);		cudaCheckError();
+		cudaMalloc((void**)&cu_sdTri,		s_nSlotData);		cudaCheckError();
 		cudaMalloc((void**)&cu_ReducedSum_Buffer,				sizeof(CU_SLOT_BUFFER_TYPE) * 2);	cudaCheckError();
 		#endif
 
@@ -106,6 +110,8 @@ void	SlotData::Malloc(int _nSlot)
 
 		cudaMallocHost((void**)&cu_sVo,			s_nSlot);				cudaCheckError();
 		cudaMallocHost((void**)&cu_sVss,		s_nSlot);				cudaCheckError();
+		cu_sdKey = nullptr;//insert keys live on the device only
+		cu_sdTri = nullptr;
 	}
 
 }
@@ -116,12 +122,14 @@ void	SlotData::Free(void)
 	{
 		#ifdef _CUDA_USE_SERIALIZED_SLOTDATA_MEMORY
 		cudaFree((void*)cu_sNPxl);		cudaCheckError();
-		cu_sNPxl = cu_sdType = cu_sdZcrd = cu_sdZnrm = cu_ReducedSum_Buffer = nullptr;
+		cu_sNPxl = cu_sdType = cu_sdZcrd = cu_sdZnrm = cu_sdKey = cu_sdTri = cu_ReducedSum_Buffer = nullptr;
 		#else
 		cudaFree((void*)cu_sNPxl);	cudaCheckError();
 		cudaFree((void*)cu_sdType);	cudaCheckError();
 		cudaFree((void*)cu_sdZcrd);	cudaCheckError();
 		cudaFree((void*)cu_sdZnrm);	cudaCheckError();
+		cudaFree((void*)cu_sdKey);	cudaCheckError();
+		cudaFree((void*)cu_sdTri);	cudaCheckError();
 		cudaFree((void*)cu_ReducedSum_Buffer);cudaCheckError();
 		#endif
 
@@ -157,14 +165,17 @@ void	SlotData::ReadPxls(
 void	SlotData::SetZero(void)
 {
 	#ifdef _CUDA_USE_SERIALIZED_SLOTDATA_MEMORY
-	const size_t s_serial_data = s_nSlot + s_nSlotData * 3 + 2 * sizeof(CU_SLOT_BUFFER_TYPE);
+	const size_t s_serial_data = s_nSlot + s_nSlotData * 5 + 2 * sizeof(CU_SLOT_BUFFER_TYPE);
 	cudaMemsetAsync((void*)cu_sNPxl,		0x00, s_serial_data,		 stream);					cudaCheckError();
 	#else
 	cudaMemsetAsync((void*)cu_sNPxl,		0x00, s_nSlot,		 stream);					cudaCheckError();
 	cudaMemsetAsync((void*)cu_sdType,		0x00, s_nSlotData, stream);					cudaCheckError();
 	cudaMemsetAsync((void*)cu_sdZcrd,		0x00, s_nSlotData, stream);					cudaCheckError();
 	cudaMemsetAsync((void*)cu_sdZnrm,		0x00, s_nSlotData, stream);					cudaCheckError();
+	cudaMemsetAsync((void*)cu_sdKey,		0x00, s_nSlotData, stream);					cudaCheckError();
 	#endif
+	//tri-order array starts at "infinity" (0x7f7f7f7f) so atomicMin records the first inserting triangle
+	cudaMemsetAsync((void*)cu_sdTri,		0x7f, s_nSlotData, stream);					cudaCheckError();
 
 #ifndef _CUDA_USE_SERIALIZED_VO_VSS_MEMORY
 	cudaMemsetAsync((void*)cu_sVo,			0x00, s_nSlot,		 stream);					cudaCheckError();

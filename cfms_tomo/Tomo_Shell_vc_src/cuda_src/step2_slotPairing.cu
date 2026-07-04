@@ -238,7 +238,7 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 #ifdef _CUDA_USE_NONZERO_SLOTBUFFER_ONLY
 	if (thIDx < S_L[thIDy])
 #else
-	if (slotValid && thIDx < CU_SLOT_CAPACITY_16)
+	if (slotValid && thIDx < slotLenPair[thIDy])//rows beyond the (truncated) count are stale/unused - skip their traffic
 #endif
 	{ //copy slotbuffer pxl data in global memory to local shared memory.
 		memType[thIDy][thIDx] = cu_pType[uliSlotDataIdx + thIDy * CU_SLOT_CAPACITY_16 + thIDx];
@@ -254,8 +254,15 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 
 #ifdef _TURN_ON_PAIRING_STEP_1
 	//#1. sortSlotByZ()
+	//odd-even transposition sort finishes in max(slotLen) passes; with CAPACITY=256
+	//running all 256 passes for mostly-short slots would waste ~4x sync/compute.
+	__shared__ int sortPasses;
+	if (thIDx == 0 && thIDy == 0) { sortPasses = 0; }
+	__syncthreads();
+	if (thIDx == 0) { atomicMax(&sortPasses, (int)slotLenPair[thIDy]); }
+	__syncthreads();
 	//per-BLOCK operation +++++++++++++++
-	for (CU_SLOT_BUFFER_TYPE p = 0; p < CU_SLOT_CAPACITY_16; p++)
+	for (CU_SLOT_BUFFER_TYPE p = 0; p < sortPasses; p++)
 	{
 		unsigned int offset = p - (p / 2) * 2;//p % 2
 		unsigned int iLeft = 2 * thIDx + offset;
@@ -485,7 +492,7 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 #ifdef _CUDA_USE_NONZERO_SLOTBUFFER_ONLY
 	if (bWriteBack && thIDx < S_L[thIDy]) { //write back.
 #else
-	if (slotValid && bWriteBack && thIDx < CU_SLOT_CAPACITY_16) { //write back.
+	if (slotValid && bWriteBack && thIDx < min(slotLenPair[thIDy] + 2, (CU_SLOT_BUFFER_TYPE)CU_SLOT_CAPACITY_16)) { //write back pairing results (+2: bottom SSA/NVA pixels appended by the brief path).
 #endif
 		cu_pType[uliSlotDataIdx + thIDy * CU_SLOT_CAPACITY_16 + thIDx] = memType[thIDy][thIDx];
 		cu_pZcrd[uliSlotDataIdx + thIDy * CU_SLOT_CAPACITY_16 + thIDx] = memZcrd[thIDy][thIDx];

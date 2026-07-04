@@ -40,10 +40,9 @@ __device__ static inline char atomicOr(char* address, char val)
 
 		do {
 				long_assumed = long_old;
-				long_val = __byte_perm(long_old, 0, long_address_modulo) + val;
+				long_val = __byte_perm(long_old, 0, long_address_modulo) | val;//OR the target byte only
 				replacement = __byte_perm(long_old, long_val, selector);
-				//long_old = atomicCAS(base_address, long_assumed, replacement);
-				long_old = atomicOr(base_address, replacement);
+				long_old = atomicCAS(base_address, long_assumed, replacement);//CAS retry-loop; a raw atomicOr here corrupted neighbor bytes
 		} while (long_old != long_assumed);
 		return __byte_perm(long_old, 0, long_address_modulo);
 }

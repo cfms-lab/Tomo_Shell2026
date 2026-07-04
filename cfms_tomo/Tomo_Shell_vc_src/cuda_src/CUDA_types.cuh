@@ -47,11 +47,17 @@ typedef unsigned long int CU_ULInt;
 typedef			 int CU_SLOT_BUFFER_TYPE;//4 bytes [	-2,147,483,648 ~ 2,147,483,647]
 
 static const int CU_FLATTRI_SIZE_16		= 20;//triangle data cpu->gpu: vtx0,vtx1,vtx2,nrm0,nrm1,nrm2 (3*6) + AABB[2]. 3 per-vertex normals enable CPU-matching normal interpolation.
-static const int CU_SLOT_CAPACITY_16	= 64;//larger slot capacity for shell-thickness voxelization
+static const int CU_SLOT_CAPACITY_16	= 512;//~10^6-face meshes saturate 64 hard (E3: 87% of nonempty slots, ~500 still full at 256) -> dropped pixels made vss nondeterministic/underestimated.
+//CPU(STomoVoxelSpaceInfo) slots hold nSlotCapacityHeight-1 = 63 pixels; keeping more on the GPU
+//inflates vss ~2x vs the CPU reference at pixel-dense orientations (E3 Spearman 0.99 -> 0.91).
+//So voxelize collects ALL unique pixels (deterministic, no insert race), then a truncate pass
+//deterministically keeps the 63 largest (z,nZ) keys per slot to stay in the CPU regime.
+//Set to CU_SLOT_CAPACITY_16 to disable truncation (full-retention research mode).
+static const int CU_SLOT_TRUNCATE_TO	= 63;
 static const int CU_MATRIX_SIZE_12		= 12;//4x3 rotation/translation matrix
 
 static const int CU_TRI_PER_WORK			= 32;//RTX4090�� 16���� 32�� �� �� ������. https://junstar92.tistory.com/430
-static const int CU_SLOTS_PER_WORK		= 8;//RTX4090�� 32���� 16�� ����.
+static const int CU_SLOTS_PER_WORK		= 2;//step2 block = (CU_SLOT_CAPACITY_16 x CU_SLOTS_PER_WORK) threads and must stay <= 1024.
 
 static const int CU_MAX_NUMBER_OF_STREAM = 16;
 

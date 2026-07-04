@@ -61,48 +61,51 @@ __device__  __inline__ CU_SLOT_BUFFER_TYPE  cu_getBaryCoordZ(
 }
 __device__ __inline__ void cu_insertSlotPixel_SetBit(
 	CU_SLOT_BUFFER_TYPE* memNPxl,
+	CU_SLOT_BUFFER_TYPE* cu_pKey,
+	CU_SLOT_BUFFER_TYPE* cu_pTri,
 	CU_SLOT_BUFFER_TYPE* cu_pType,
 	CU_SLOT_BUFFER_TYPE* cu_pZcrd,
 	CU_SLOT_BUFFER_TYPE* cu_pZnrm,
 	int slot_ID,
+	int triID,
 	int z,
 	int nZ,
 	CU_SLOT_BUFFER_TYPE type)
 {
-	const int lockBit = 0x40000000;
-	const int countMask = 0x3fffffff;
-	int oldCount;
-	do {
-		do { oldCount = atomicCAS((int*)memNPxl, 0, 0); } while (oldCount & lockBit);
-	} while (atomicCAS((int*)memNPxl, oldCount, oldCount | lockBit) != oldCount);
-
-	int count = oldCount & countMask;
-	int pxlIdx = -1;
-	for (int p = 0; p < count && p < CU_SLOT_CAPACITY_16; p++)
+	//Lock-free de-duplicating insert (linear probing within the slot's row).
+	//(z,nZ) is packed into one nonzero key so an entry is claimed with a single
+	//atomicCAS; 0 = empty. Keys are write-once (0 -> key, never mutated), so a
+	//stale plain read can only show 0 and the CAS re-checks against L2 truth.
+	//The surviving pixel SET is order-independent -> results are deterministic
+	//(the old spin-lock version dropped schedule-dependent pixels once a slot
+	//filled, which made vss nondeterministic and could zero it entirely).
+	//cu_pTri keeps the smallest inserting (parent) triangle ID per entry; the
+	//truncate pass uses it to emulate the CPU's sequential-insertion capacity.
+	//z >= -8 (shell offset can push a few voxels below 0), |nZ| <= ~1000.
+	const CU_SLOT_BUFFER_TYPE key = ((z + 8) << 12) | (nZ + 1024);//nonzero for all valid inputs
+	const CU_ULInt row0 = (CU_ULInt)slot_ID * CU_SLOT_CAPACITY_16;
+	for (int p = 0; p < CU_SLOT_CAPACITY_16; p++)
 	{
-		const CU_ULInt id = slot_ID * CU_SLOT_CAPACITY_16 + p;
-		if (cu_pZcrd[id] == z && cu_pZnrm[id] == nZ)
+		const CU_ULInt id = row0 + p;
+		CU_SLOT_BUFFER_TYPE k = cu_pKey[id];
+		if (k == 0) { k = atomicCAS((int*)cu_pKey + id, 0, key); }
+		if (k == 0)//claimed a fresh entry: this thread is its only writer
 		{
-			pxlIdx = p;
-			break;
+			cu_pZcrd[id] = z;
+			cu_pZnrm[id] = nZ;
+			atomicOr((int*)cu_pType + id, (int)type);
+			atomicMin((int*)cu_pTri + id, triID);
+			atomicAdd((int*)memNPxl, 1);//count == number of stored unique pixels
+			return;
+		}
+		if (k == key)//duplicate (z,nZ): merge type bits only
+		{
+			atomicOr((int*)cu_pType + id, (int)type);
+			atomicMin((int*)cu_pTri + id, triID);
+			return;
 		}
 	}
-
-	if (pxlIdx < 0 && count < CU_SLOT_CAPACITY_16)
-	{
-		pxlIdx = count;
-		count++;
-	}
-
-	if (pxlIdx >= 0)
-	{
-		const CU_ULInt id = slot_ID * CU_SLOT_CAPACITY_16 + pxlIdx;
-		cu_pType[id] |= type;
-		cu_pZcrd[id] = z;
-		cu_pZnrm[id] = nZ;
-	}
-	__threadfence();
-	atomicExch((int*)memNPxl, count);
+	//slot full of other keys: pixel dropped (capacity overflow; shows up as sat/maxLen in the slot-input debug counters)
 }
 
 __device__ __inline__ CU_SLOT_BUFFER_TYPE cu_typeFromNz_CPUThreshold(int nZ)
@@ -165,12 +168,12 @@ __device__ __inline__ CU_SLOT_BUFFER_TYPE cu_typeFromNz_CPUThreshold(int nZ)
 
 
 		//per-THREAD operation ------------------------------------
-		//  (16,16)³»¿¡¼­ÀÇ ·ÎÄÃ ÇÈ¼¿ÁÂÇ¥´Â (threadIdx.x, threadIdx.y)
-		//  global ÁÂÇ¥°è´Â (AABB_x0 + threadIdx.x, AABB_y0 + threadIdx.y)ÀÓ.
+		//  (16,16)ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¼ï¿½ï¿½ï¿½Ç¥ï¿½ï¿½ (threadIdx.x, threadIdx.y)
+		//  global ï¿½ï¿½Ç¥ï¿½ï¿½ï¿½ (AABB_x0 + threadIdx.x, AABB_y0 + threadIdx.y)ï¿½ï¿½.
 		//AABB of current triangle
 		const register int& global_AABB_x0 = ftri[12];
 		const register int& global_AABB_y0 = ftri[13];
-		register float vxl_global_cnt[2] = { //global ÁÂÇ¥°è¿¡¼­ÀÇ ÇöÀç º¹¼¿ÀÇ À§Ä¡.
+		register float vxl_global_cnt[2] = { //global ï¿½ï¿½Ç¥ï¿½è¿¡ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Ä¡.
 						(global_AABB_x0 + threadIdx.x) + cu_fMARGIN + cu_HALF_VOXEL_SIZE,
 						(global_AABB_y0 + threadIdx.y) + cu_fMARGIN + cu_HALF_VOXEL_SIZE };
 		if (vxl_global_cnt[0] >= nVoxelX || vxl_global_cnt[1] >= nVoxelX) return;
@@ -224,6 +227,8 @@ __device__ __inline__ CU_SLOT_BUFFER_TYPE cu_typeFromNz_CPUThreshold(int nZ)
 		float* cu_m4x3,	float* cu_flattri0,
 		int* cu_parentHit,
 		CU_SLOT_BUFFER_TYPE* cu_nPixel,
+		CU_SLOT_BUFFER_TYPE* cu_pKey,
+		CU_SLOT_BUFFER_TYPE* cu_pTri,
 		CU_SLOT_BUFFER_TYPE* cu_pType,
 		CU_SLOT_BUFFER_TYPE* cu_pZcrd,
 		CU_SLOT_BUFFER_TYPE* cu_pZnrm,
@@ -295,13 +300,14 @@ __device__ __inline__ CU_SLOT_BUFFER_TYPE cu_typeFromNz_CPUThreshold(int nZ)
 			CU_SLOT_BUFFER_TYPE*	memNPxl	= cu_nPixel + slot_ID;
 			int new_z  = int(u * ftri[thIDz][2] + v * ftri[thIDz][5] + w * ftri[thIDz][8]);
 			int new_nZ = int((u * _rnz0 + v * _rnz1 + w * _rnz2) * cu_fNORMALFACTOR);
+			const int orderID = (parentID >= 0) ? parentID : (triID0 + thIDz);
 			cu_insertSlotPixel_SetBit(
-				memNPxl, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID,
+				memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, orderID,
 				new_z, new_nZ, cu_typeFromNz_CPUThreshold(new_nZ));
 			if (bShellMesh && shell_z_offset > 0)//subsidiary opposite-normal pixel for thin/zero-thickness shell
 			{
 				cu_insertSlotPixel_SetBit(
-					memNPxl, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID,
+					memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, orderID,
 					(new_nZ >= 0) ? new_z - shell_z_offset : new_z + shell_z_offset,
 					new_nZ * -1,
 					cu_typeFromNz_CPUThreshold(new_nZ * -1));
@@ -316,6 +322,8 @@ __device__ __inline__ CU_SLOT_BUFFER_TYPE cu_typeFromNz_CPUThreshold(int nZ)
 		float* cu_m4x3, int* cu_tri0, float* cu_vtx0, float* cu_vtxNrm0,
 		int* cu_triHitCount,
 		CU_SLOT_BUFFER_TYPE* cu_nPixel,
+		CU_SLOT_BUFFER_TYPE* cu_pKey,
+		CU_SLOT_BUFFER_TYPE* cu_pTri,
 		CU_SLOT_BUFFER_TYPE* cu_pType,
 		CU_SLOT_BUFFER_TYPE* cu_pZcrd,
 		CU_SLOT_BUFFER_TYPE* cu_pZnrm,
@@ -381,11 +389,11 @@ __device__ __inline__ CU_SLOT_BUFFER_TYPE cu_typeFromNz_CPUThreshold(int nZ)
 					int new_z = int(u * tri[2] + v * tri[5] + w * tri[8]);
 					int new_nZ = int((u * rnz0 + v * rnz1 + w * rnz2) * cu_fNORMALFACTOR);
 					CU_SLOT_BUFFER_TYPE* memNPxl = cu_nPixel + slot_ID;
-					cu_insertSlotPixel_SetBit(memNPxl, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID,
+					cu_insertSlotPixel_SetBit(memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, triID,
 						new_z, new_nZ, cu_typeFromNz_CPUThreshold(new_nZ));
 					if (bShellMesh && shell_z_offset > 0)
 					{
-						cu_insertSlotPixel_SetBit(memNPxl, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID,
+						cu_insertSlotPixel_SetBit(memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, triID,
 							(new_nZ >= 0) ? new_z - shell_z_offset : new_z + shell_z_offset,
 							new_nZ * -1, cu_typeFromNz_CPUThreshold(new_nZ * -1));
 					}
@@ -413,22 +421,142 @@ __device__ __inline__ CU_SLOT_BUFFER_TYPE cu_typeFromNz_CPUThreshold(int nZ)
 				int new_z = int(cz);
 				int new_nZ = int(rnz0 * cu_fNORMALFACTOR);
 				CU_SLOT_BUFFER_TYPE* memNPxl = cu_nPixel + slot_ID;
-				cu_insertSlotPixel_SetBit(memNPxl, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID,
+				cu_insertSlotPixel_SetBit(memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, triID,
 					new_z, new_nZ, cu_typeFromNz_CPUThreshold(new_nZ));
 				if (bShellMesh && shell_z_offset > 0)
 				{
-					cu_insertSlotPixel_SetBit(memNPxl, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID,
+					cu_insertSlotPixel_SetBit(memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, triID,
 						(new_nZ >= 0) ? new_z - shell_z_offset : new_z + shell_z_offset,
 						new_nZ * -1, cu_typeFromNz_CPUThreshold(new_nZ * -1));
 				}
 			}
 		}
 	}
+	//warp-per-triangle version of cu_rotVoxelOriginal_Streamed_16x16. ~10^6-face meshes
+	//average well under 1 pixel per triangle, so a 256-thread block per triangle leaves
+	//>99% of threads idle and pays 10^6 block launches per orientation. One 32-lane warp
+	//per triangle (8 triangles per 256-thread block) covers the same AABB with a strided
+	//loop; the per-pixel arithmetic is kept expression-identical so results do not change.
+	__global__ void cu_rotVoxelOriginal_WarpPerTri(
+		int nVoxelX, int nYPR, int nTri, int yprID,
+		float* cu_m4x3, int* cu_tri0, float* cu_vtx0, float* cu_vtxNrm0,
+		int* cu_triHitCount,
+		CU_SLOT_BUFFER_TYPE* cu_nPixel,
+		CU_SLOT_BUFFER_TYPE* cu_pKey,
+		CU_SLOT_BUFFER_TYPE* cu_pTri,
+		CU_SLOT_BUFFER_TYPE* cu_pType,
+		CU_SLOT_BUFFER_TYPE* cu_pZcrd,
+		CU_SLOT_BUFFER_TYPE* cu_pZnrm,
+		bool bShellMesh,
+		int shell_z_offset)
+	{
+		const int triID = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
+		const int lane = threadIdx.x & 31;
+		if (triID >= nTri || yprID >= nYPR) return;//warp-uniform exit
+
+		float m4x3[CU_MATRIX_SIZE_12];
+		#pragma unroll
+		for (int i = 0; i < CU_MATRIX_SIZE_12; i++) { m4x3[i] = cu_m4x3[yprID * CU_MATRIX_SIZE_12 + i]; }
+
+		float tri[9], nrm[9];//all lanes hold the (redundant) triangle: broadcast loads, no shared mem / syncs
+		#pragma unroll
+		for (int k = 0; k < 3; k++)
+		{
+			const int vid = cu_tri0[triID * 3 + k];
+			tri[k * 3 + 0] = cu_vtx0[vid * 3 + 0];
+			tri[k * 3 + 1] = cu_vtx0[vid * 3 + 1];
+			tri[k * 3 + 2] = cu_vtx0[vid * 3 + 2];
+			nrm[k * 3 + 0] = cu_vtxNrm0[vid * 3 + 0];
+			nrm[k * 3 + 1] = cu_vtxNrm0[vid * 3 + 1];
+			nrm[k * 3 + 2] = cu_vtxNrm0[vid * 3 + 2];
+		}
+		#pragma unroll
+		for (int k = 0; k < 3; k++)
+		{
+			cu_matrixOp(m4x3, &tri[k * 3]);
+			tri[k * 3 + 0] += cu_fMARGIN;
+			tri[k * 3 + 1] += cu_fMARGIN;
+			tri[k * 3 + 2] += cu_fMARGIN;
+		}
+
+		float minx = min(min(tri[0], tri[3]), tri[6]);
+		float miny = min(min(tri[1], tri[4]), tri[7]);
+		float maxx = max(max(tri[0], tri[3]), tri[6]);
+		float maxy = max(max(tri[1], tri[4]), tri[7]);
+		int x0 = int(minx);
+		int y0 = int(miny);
+		int x1 = int(maxx);
+		int y1 = int(maxy);
+
+		float rnz0 = m4x3[8] * nrm[0] + m4x3[9] * nrm[1] + m4x3[10] * nrm[2];
+		float rnz1 = m4x3[8] * nrm[3] + m4x3[9] * nrm[4] + m4x3[10] * nrm[5];
+		float rnz2 = m4x3[8] * nrm[6] + m4x3[9] * nrm[7] + m4x3[10] * nrm[8];
+
+		int nHits = 0;
+		const int aabbW = x1 - x0 + 1;
+		const int nPix = aabbW * (y1 - y0 + 1);
+		for (int i = lane; i < nPix; i += 32)
+		{
+			const int x = x0 + i % aabbW;
+			const int y = y0 + i / aabbW;
+			float vxl_global_crd[2] = { x + cu_fMARGIN + cu_HALF_VOXEL_SIZE, y + cu_fMARGIN + cu_HALF_VOXEL_SIZE };
+			if (vxl_global_crd[0] < 0 || vxl_global_crd[1] < 0 || vxl_global_crd[0] >= nVoxelX || vxl_global_crd[1] >= nVoxelX) continue;
+			float u = -1.f, v = -1.f, w = -1.f;
+			if (cu_getBaryCoord2D(vxl_global_crd, &tri[0], &tri[3], &tri[6], u, v, w))
+			{
+				int slot_ID = y * nVoxelX + x;
+				int new_z = int(u * tri[2] + v * tri[5] + w * tri[8]);
+				int new_nZ = int((u * rnz0 + v * rnz1 + w * rnz2) * cu_fNORMALFACTOR);
+				CU_SLOT_BUFFER_TYPE* memNPxl = cu_nPixel + slot_ID;
+				cu_insertSlotPixel_SetBit(memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, triID,
+					new_z, new_nZ, cu_typeFromNz_CPUThreshold(new_nZ));
+				if (bShellMesh && shell_z_offset > 0)
+				{
+					cu_insertSlotPixel_SetBit(memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, triID,
+						(new_nZ >= 0) ? new_z - shell_z_offset : new_z + shell_z_offset,
+						new_nZ * -1, cu_typeFromNz_CPUThreshold(new_nZ * -1));
+				}
+				nHits++;
+			}
+		}
+
+		for (int off = 16; off > 0; off >>= 1) { nHits += __shfl_down_sync(0xffffffff, nHits, off); }
+		if (lane == 0)
+		{
+			if (cu_triHitCount != nullptr) cu_triHitCount[triID] = nHits;
+			if (nHits == 0)//very small triangle: force its centroid pixel (same as the block version / CPU triVoxel)
+			{
+				float cx = (tri[0] + tri[3] + tri[6]) * 0.333333f;
+				float cy = (tri[1] + tri[4] + tri[7]) * 0.333333f;
+				float cz = (tri[2] + tri[5] + tri[8]) * 0.333333f;
+				int ix = int(cx);
+				int iy = int(cy);
+				if (ix >= 0 && iy >= 0 && ix < nVoxelX && iy < nVoxelX)
+				{
+					int slot_ID = iy * nVoxelX + ix;
+					int new_z = int(cz);
+					int new_nZ = int(rnz0 * cu_fNORMALFACTOR);
+					CU_SLOT_BUFFER_TYPE* memNPxl = cu_nPixel + slot_ID;
+					cu_insertSlotPixel_SetBit(memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, triID,
+						new_z, new_nZ, cu_typeFromNz_CPUThreshold(new_nZ));
+					if (bShellMesh && shell_z_offset > 0)
+					{
+						cu_insertSlotPixel_SetBit(memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, triID,
+							(new_nZ >= 0) ? new_z - shell_z_offset : new_z + shell_z_offset,
+							new_nZ * -1, cu_typeFromNz_CPUThreshold(new_nZ * -1));
+					}
+				}
+			}
+		}
+	}
+
 	__global__ void cu_rotVoxelFallback_Streamed_1d(
 		int nVoxelX, int nYPR, int nTri, int yprID,
 		float* cu_m4x3, float* cu_parentFallbackTri,
 		int* cu_parentHit,
 		CU_SLOT_BUFFER_TYPE* cu_nPixel,
+		CU_SLOT_BUFFER_TYPE* cu_pKey,
+		CU_SLOT_BUFFER_TYPE* cu_pTri,
 		CU_SLOT_BUFFER_TYPE* cu_pType,
 		CU_SLOT_BUFFER_TYPE* cu_pZcrd,
 		CU_SLOT_BUFFER_TYPE* cu_pZnrm,
@@ -459,14 +587,96 @@ __device__ __inline__ CU_SLOT_BUFFER_TYPE cu_typeFromNz_CPUThreshold(int nZ)
 		int slot_ID = cy * nVoxelX + cx;
 		CU_SLOT_BUFFER_TYPE* memNPxl = cu_nPixel + slot_ID;
 		cu_insertSlotPixel_SetBit(
-			memNPxl, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID,
+			memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, parentID,
 			new_z, new_nZ, cu_typeFromNz_CPUThreshold(new_nZ));
 		if (bShellMesh && shell_z_offset > 0)
 		{
 			cu_insertSlotPixel_SetBit(
-				memNPxl, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID,
+				memNPxl, cu_pKey, cu_pTri, cu_pType, cu_pZcrd, cu_pZnrm, slot_ID, parentID,
 				(new_nZ >= 0) ? new_z - shell_z_offset : new_z + shell_z_offset,
 				new_nZ * -1,
 				cu_typeFromNz_CPUThreshold(new_nZ * -1));
 		}
+	}
+
+	//After voxelize collected ALL unique pixels, deterministically keep only the
+	//CU_SLOT_TRUNCATE_TO pixels whose inserting (parent) triangle comes FIRST in the
+	//mesh order, ties broken by the (z,nZ) key. This emulates the CPU pipeline, which
+	//iterates triangles sequentially and stops accepting pixels once a slot holds 63
+	//(STomoVoxelSpaceInfo::SetBit). A z-based selection is deterministic too, but it
+	//biases which part of a column survives and shifted vss ~ -25% vs the CPU; the
+	//triangle-order rule keeps the kept SET spatially unbiased like the CPU's.
+	__global__ void cu_truncateSlots(
+		int nSlot, int keepN,
+		CU_SLOT_BUFFER_TYPE* cu_nPixel,
+		CU_SLOT_BUFFER_TYPE* cu_pKey,
+		CU_SLOT_BUFFER_TYPE* cu_pTri,
+		CU_SLOT_BUFFER_TYPE* cu_pType,
+		CU_SLOT_BUFFER_TYPE* cu_pZcrd,
+		CU_SLOT_BUFFER_TYPE* cu_pZnrm)
+	{
+		const int slotID = blockIdx.x * blockDim.x + threadIdx.x;
+		if (slotID >= nSlot || keepN >= CU_SLOT_CAPACITY_16) return;
+		int count = cu_nPixel[slotID];
+		if (count <= keepN) return;
+		if (count > CU_SLOT_CAPACITY_16) count = CU_SLOT_CAPACITY_16;
+		const CU_ULInt row0 = (CU_ULInt)slotID * CU_SLOT_CAPACITY_16;
+
+		//priority = (minTriID << 22) | key : unique per entry (keys unique, 22 bits)
+		#define CU_TRUNC_PRIO(r) ( ((unsigned long long)(unsigned int)cu_pTri[row0 + (r)] << 22) \
+		                         |  (unsigned long long)(unsigned int)cu_pKey[row0 + (r)] )
+
+		//max-heap of the keepN smallest priorities
+		unsigned long long heap[CU_SLOT_TRUNCATE_TO];
+		for (int i = 0; i < keepN; i++) { heap[i] = CU_TRUNC_PRIO(i); }
+		for (int i = keepN / 2 - 1; i >= 0; i--)
+		{
+			int p = i;
+			while (true)
+			{
+				int c = 2 * p + 1;
+				if (c >= keepN) break;
+				if (c + 1 < keepN && heap[c + 1] > heap[c]) c++;
+				if (heap[c] <= heap[p]) break;
+				unsigned long long t = heap[c]; heap[c] = heap[p]; heap[p] = t;
+				p = c;
+			}
+		}
+		for (int r = keepN; r < count; r++)
+		{
+			unsigned long long k = CU_TRUNC_PRIO(r);
+			if (k >= heap[0]) continue;
+			heap[0] = k;
+			int p = 0;
+			while (true)
+			{
+				int c = 2 * p + 1;
+				if (c >= keepN) break;
+				if (c + 1 < keepN && heap[c + 1] > heap[c]) c++;
+				if (heap[c] <= heap[p]) break;
+				unsigned long long t = heap[c]; heap[c] = heap[p]; heap[p] = t;
+				p = c;
+			}
+		}
+		const unsigned long long thresh = heap[0];//keepN-th smallest priority
+
+		//stable in-place compaction of entries with priority <= thresh (exactly keepN of them)
+		int w = 0;
+		for (int r = 0; r < count && w < keepN; r++)
+		{
+			if (CU_TRUNC_PRIO(r) > thresh) continue;
+			if (w != r)
+			{
+				const CU_ULInt src = row0 + r;
+				const CU_ULInt dst = row0 + w;
+				cu_pKey[dst]	= cu_pKey[src];
+				cu_pTri[dst]	= cu_pTri[src];
+				cu_pType[dst] = cu_pType[src];
+				cu_pZcrd[dst] = cu_pZcrd[src];
+				cu_pZnrm[dst] = cu_pZnrm[src];
+			}
+			w++;
+		}
+		cu_nPixel[slotID] = w;
+		#undef CU_TRUNC_PRIO
 	}

@@ -80,15 +80,13 @@ void reducedSum_Streamed(int N, int* dev_src, cudaStream_t _stream, int * dev_ou
 	int threads = 256;
 	//int blocks = min((N + threads - 1) / threads, 2048);// why 2048?
 	int blocks = (N + threads - 1) / threads;
-	
-	cudaEvent_t ev_stream_finished;
-	cudaEventCreate(&ev_stream_finished);
 
 	device_reduce_warp_atomic_kernel << <blocks, threads, 0, _stream>> > (dev_src, dev_out_buf, N);    cudaCheckError();
-	//device_reduce_block_atomic_kernel << <blocks, threads, 0, _stream>> > (dev_src, dev_out_buf, N);    cudaCheckError();
-	cudaEventRecord(ev_stream_finished, _stream);
-	cudaEventSynchronize(ev_stream_finished);
-
+	//the sum is copied by a following default-stream cudaMemcpy that does NOT sync with
+	//non-blocking streams, so block here. (was: cudaEventCreate per call, never destroyed
+	//-> ~260k leaked events per 1-deg sweep, and an unchecked create failure would
+	//silently skip the sync)
+	cudaStreamSynchronize(_stream); cudaCheckError();
 }
 
 

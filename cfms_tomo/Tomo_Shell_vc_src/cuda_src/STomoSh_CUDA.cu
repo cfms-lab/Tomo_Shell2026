@@ -568,6 +568,35 @@ __host__ void STomoSh_CUDA::Step1_RotateAndPixelize( SlotDataIterator sdIt, int 
 	if (envOriginalTri != nullptr) useOriginalTriVoxelizer = (atoi(envOriginalTri) != 0);
 	if (useOriginalTriVoxelizer)
 	{
+		const char* envWarpTri = std::getenv("TOMO_CUDA_WARP_TRI");
+		bool useWarpPerTri = true;//warp-per-triangle rasterizer: same results, far less idle threads on ~10^6-face meshes
+		int wptWarpsPerBlock = 4;//A/B on E3/E8 (RTX 5080): 2~8 all good, 4 best overall
+		if (envWarpTri != nullptr)
+		{
+			const int v = atoi(envWarpTri);
+			useWarpPerTri = (v != 0);
+			if (v >= 2 && v <= 32) wptWarpsPerBlock = v;//A/B knob: warps per block
+		}
+		if (useWarpPerTri)
+		{
+			const dim3 dgWarp((printer_info.nTri + wptWarpsPerBlock - 1) / wptWarpsPerBlock);
+			const dim3 dbWarp(wptWarpsPerBlock * 32);
+			cu_rotVoxelOriginal_WarpPerTri << < dgWarp, dbWarp, 0, sdIt->stream >> > (
+				nVoxelX, nYPR, printer_info.nTri, yprID_to_start,
+				cu_m4x3 + 0 * CU_MATRIX_SIZE_12,
+				cu_Tri0, cu_Vtx0, cu_VtxNrm0,
+				streamParentHit,
+				sdIt->cu_sNPxl,
+				sdIt->cu_sdKey,
+				sdIt->cu_sdTri,
+				sdIt->cu_sdType,
+				sdIt->cu_sdZcrd,
+				sdIt->cu_sdZnrm,
+				printer_info.bShellMesh,
+				shell_z_offset); cudaCheckError();
+		}
+		else
+		{
 		const dim3 dgOrig(printer_info.nTri);
 		const dim3 dbOrig(16, 16);
 		cu_rotVoxelOriginal_Streamed_16x16 << < dgOrig, dbOrig, 0, sdIt->stream >> > (
@@ -576,11 +605,15 @@ __host__ void STomoSh_CUDA::Step1_RotateAndPixelize( SlotDataIterator sdIt, int 
 			cu_Tri0, cu_Vtx0, cu_VtxNrm0,
 			streamParentHit,
 			sdIt->cu_sNPxl,
+			sdIt->cu_sdKey,
+			sdIt->cu_sdTri,
 			sdIt->cu_sdType,
 			sdIt->cu_sdZcrd,
 			sdIt->cu_sdZnrm,
 			printer_info.bShellMesh,
 			shell_z_offset); cudaCheckError();
+		}
+		Step1_TruncateSlots(sdIt);
 		char* tomoTriHitCallEnv = nullptr;
 		char* tomoTriHitDirEnv = nullptr;
 		size_t tomoTriHitEnvLen = 0;
@@ -630,6 +663,8 @@ __host__ void STomoSh_CUDA::Step1_RotateAndPixelize( SlotDataIterator sdIt, int 
 					cu_FlatTri0			+ 0 * nFlatTri,
 					streamParentHit,
 					sdIt->cu_sNPxl,
+					sdIt->cu_sdKey,
+					sdIt->cu_sdTri,
 					sdIt->cu_sdType,
 					sdIt->cu_sdZcrd,
 					sdIt->cu_sdZnrm,
@@ -644,11 +679,30 @@ __host__ void STomoSh_CUDA::Step1_RotateAndPixelize( SlotDataIterator sdIt, int 
 					cu_parentFallbackTri,
 					streamParentHit,
 					sdIt->cu_sNPxl,
+					sdIt->cu_sdKey,
+					sdIt->cu_sdTri,
 					sdIt->cu_sdType,
 					sdIt->cu_sdZcrd,
 					sdIt->cu_sdZnrm,
 					printer_info.bShellMesh,
 					shell_z_offset); cudaCheckError();
+	Step1_TruncateSlots(sdIt);
+}
+
+__host__ void STomoSh_CUDA::Step1_TruncateSlots(SlotDataIterator sdIt)
+{
+	//deterministically keep the CU_SLOT_TRUNCATE_TO largest (z,nZ) keys per slot (CPU-capacity regime)
+	if (CU_SLOT_TRUNCATE_TO >= CU_SLOT_CAPACITY_16) return;
+	const int threads = 256;
+	const int blocks = (nSlot + threads - 1) / threads;
+	cu_truncateSlots << < blocks, threads, 0, sdIt->stream >> > (
+					nSlot, CU_SLOT_TRUNCATE_TO,
+					sdIt->cu_sNPxl,
+					sdIt->cu_sdKey,
+					sdIt->cu_sdTri,
+					sdIt->cu_sdType,
+					sdIt->cu_sdZcrd,
+					sdIt->cu_sdZnrm); cudaCheckError();
 }
 __host__ void  STomoSh_CUDA::Step2_Pairing(SlotDataIterator sdIt)
 {
@@ -710,7 +764,7 @@ cudaMemcpy( reduced_sum_buffer,  cu_reduced_sum_buffer, sizeof(int) * 2 * nStrea
 #elif defined( _CUDA_USE_MULTI_STREAM)
 		//����� ������ Vo_stream, Vss_stream�� ����Ѵ�. 
 #ifdef _CUDA_USE_REDUCED_SUM_BATCH
-		 // reduction outputs are cleared in their own streams below
+		 // reduction outputs are cleared in their own streams below
 #endif
 		for(int s = 0 ; s < nStream ; s++)
 		{

@@ -35,8 +35,8 @@ public:
 		CU_ULInt uliData[n_uliData];
 	};
 
-	//GPU memory. 
-	static const int n_sbpData = 7;
+	//GPU memory.
+	static const int n_sbpData = 9;
 	static const int s_sbpData = sizeof(CU_SLOT_BUFFER_TYPE*) * n_sbpData;
 	union
 	{
@@ -49,6 +49,8 @@ public:
 			CU_SLOT_BUFFER_TYPE* cu_sdType;//type of pixel
 			CU_SLOT_BUFFER_TYPE* cu_sdZcrd;///Z coordinate of pixel
 			CU_SLOT_BUFFER_TYPE* cu_sdZnrm;//normal vector's Z-component of pixel
+			CU_SLOT_BUFFER_TYPE* cu_sdKey;//packed (z,nZ) entry-claim key for lock-free dedup insert (device only, 0=empty)
+			CU_SLOT_BUFFER_TYPE* cu_sdTri;//min inserting (parent) triangle ID per entry; defines the deterministic CPU-like truncation order (device only)
 
 			CU_SLOT_BUFFER_TYPE* cu_ReducedSum_Buffer;//4 byte
 		};

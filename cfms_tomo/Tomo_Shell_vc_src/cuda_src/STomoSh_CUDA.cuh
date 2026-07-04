@@ -32,6 +32,7 @@ public:
   __host__ void	Run(float *_Mo, float *_Mss, int ypr_id_to_start = 0);
 
     __host__ void  Step1_RotateAndPixelize(SlotDataIterator, int yprID_to_start);
+      __host__ void  Step1_TruncateSlots(SlotDataIterator);//keep CU_SLOT_TRUNCATE_TO largest keys per slot (CPU-capacity regime)
 
     __host__ void  Step2_Pairing(SlotDataIterator);
 
