@@ -712,7 +712,7 @@ __host__ void  STomoSh_CUDA::Step2_Pairing(SlotDataIterator sdIt)
 	int blocksize = CU_SLOTS_PER_WORK;
 	int gridsize  = (problem_size + blocksize -1) / blocksize;
 	const dim3 dgStep2( gridsize);
-	const dim3 dbStep2( CU_SLOT_CAPACITY_16, blocksize);
+	const dim3 dbStep2( CU_SLOT_PAIRING_CAPACITY_16, blocksize);
 
 	cu_slotPairing_Streamed<CU_SLOT_BUFFER_TYPE> << < dgStep2, dbStep2, 0, sdIt->stream>> > (
 				nSlot, descendingOrder, sin_theta_c_x1000,//constants

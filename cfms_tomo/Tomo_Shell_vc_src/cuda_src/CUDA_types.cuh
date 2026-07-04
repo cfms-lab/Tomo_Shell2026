@@ -54,10 +54,12 @@ static const int CU_SLOT_CAPACITY_16	= 512;//~10^6-face meshes saturate 64 hard 
 //deterministically keeps the 63 largest (z,nZ) keys per slot to stay in the CPU regime.
 //Set to CU_SLOT_CAPACITY_16 to disable truncation (full-retention research mode).
 static const int CU_SLOT_TRUNCATE_TO	= 63;
+static const int CU_SLOT_PAIRING_CAPACITY_16 =
+	(CU_SLOT_TRUNCATE_TO < CU_SLOT_CAPACITY_16) ? (CU_SLOT_TRUNCATE_TO + 2) : CU_SLOT_CAPACITY_16;
 static const int CU_MATRIX_SIZE_12		= 12;//4x3 rotation/translation matrix
 
 static const int CU_TRI_PER_WORK			= 32;//RTX4090�� 16���� 32�� �� �� ������. https://junstar92.tistory.com/430
-static const int CU_SLOTS_PER_WORK		= 2;//step2 block = (CU_SLOT_CAPACITY_16 x CU_SLOTS_PER_WORK) threads and must stay <= 1024.
+static const int CU_SLOTS_PER_WORK		= 1024 / CU_SLOT_PAIRING_CAPACITY_16;//step2 block = (CU_SLOT_PAIRING_CAPACITY_16 x CU_SLOTS_PER_WORK) threads and must stay <= 1024.
 
 static const int CU_MAX_NUMBER_OF_STREAM = 16;
 

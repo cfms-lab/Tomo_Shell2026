@@ -165,13 +165,12 @@ void	SlotData::ReadPxls(
 void	SlotData::SetZero(void)
 {
 	#ifdef _CUDA_USE_SERIALIZED_SLOTDATA_MEMORY
-	const size_t s_serial_data = s_nSlot + s_nSlotData * 5 + 2 * sizeof(CU_SLOT_BUFFER_TYPE);
-	cudaMemsetAsync((void*)cu_sNPxl,		0x00, s_serial_data,		 stream);					cudaCheckError();
+	cudaMemsetAsync((void*)cu_sNPxl,		0x00, s_nSlot,		 stream);					cudaCheckError();
+	cudaMemsetAsync((void*)cu_sdType,		0x00, s_nSlotData, stream);					cudaCheckError();
+	cudaMemsetAsync((void*)cu_sdKey,		0x00, s_nSlotData, stream);					cudaCheckError();
 	#else
 	cudaMemsetAsync((void*)cu_sNPxl,		0x00, s_nSlot,		 stream);					cudaCheckError();
 	cudaMemsetAsync((void*)cu_sdType,		0x00, s_nSlotData, stream);					cudaCheckError();
-	cudaMemsetAsync((void*)cu_sdZcrd,		0x00, s_nSlotData, stream);					cudaCheckError();
-	cudaMemsetAsync((void*)cu_sdZnrm,		0x00, s_nSlotData, stream);					cudaCheckError();
 	cudaMemsetAsync((void*)cu_sdKey,		0x00, s_nSlotData, stream);					cudaCheckError();
 	#endif
 	//tri-order array starts at "infinity" (0x7f7f7f7f) so atomicMin records the first inserting triangle

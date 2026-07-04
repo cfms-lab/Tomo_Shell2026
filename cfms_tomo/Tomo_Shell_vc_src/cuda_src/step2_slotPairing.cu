@@ -195,8 +195,8 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 	CU_SLOT_BUFFER_TYPE* cu_pZcrd ,
 	CU_SLOT_BUFFER_TYPE* cu_pZnrm)
 {
-	//(nWorksPerBlocks, 1, 1) x (CU_SLOT_CAPACITY_16 , CU_SLOTS_PER_WORK, 1)
-	const int thIDx = threadIdx.x;//[SLOT_CAPACITY]
+	//(nWorksPerBlocks, 1, 1) x (CU_SLOT_PAIRING_CAPACITY_16 , CU_SLOTS_PER_WORK, 1)
+	const int thIDx = threadIdx.x;//[PAIRING_CAPACITY]
 	const int thIDy = threadIdx.y;//local slot ID, =CU_SLOTS_PER_WORK
 	const int slotID0 = blockIdx.x * CU_SLOTS_PER_WORK;// + thIDy;//global slot ID
 
@@ -212,24 +212,24 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 	__shared__ CU_SLOT_BUFFER_TYPE slotLenPair[CU_SLOTS_PER_WORK];
 	if (thIDx == 0 && thIDy < CU_SLOTS_PER_WORK) {
 		CU_SLOT_BUFFER_TYPE n_ = slotValid ? cu_nPixel[slotID0 + thIDy] : 0;
-		slotLenPair[thIDy] = (n_ > CU_SLOT_CAPACITY_16) ? CU_SLOT_CAPACITY_16 : n_;
+		slotLenPair[thIDy] = (n_ > CU_SLOT_PAIRING_CAPACITY_16) ? CU_SLOT_PAIRING_CAPACITY_16 : n_;
 	}
 	__syncthreads();
 
 #ifdef _CUDA_USE_NONZERO_SLOTBUFFER_ONLY
 	__shared__ CU_SLOT_BUFFER_TYPE S_L[CU_SLOTS_PER_WORK];
-	if (thIDx == 0 && thIDy < CU_SLOTS_PER_WORK) { CU_SLOT_BUFFER_TYPE n_ = slotValid ? cu_nPixel[slotID0 + thIDy] : 0; S_L[thIDy] = (n_ > CU_SLOT_CAPACITY_16) ? CU_SLOT_CAPACITY_16 : n_; }//Slot Length, clamped to capacity (voxelize may over-count a saturated slot)
+	if (thIDx == 0 && thIDy < CU_SLOTS_PER_WORK) { CU_SLOT_BUFFER_TYPE n_ = slotValid ? cu_nPixel[slotID0 + thIDy] : 0; S_L[thIDy] = (n_ > CU_SLOT_PAIRING_CAPACITY_16) ? CU_SLOT_PAIRING_CAPACITY_16 : n_; }//Slot Length, clamped to post-truncation pairing capacity
 	__syncthreads();
 #else
-	CU_SLOT_BUFFER_TYPE S_L = slotValid ? CU_SLOT_CAPACITY_16 : 0;
+	CU_SLOT_BUFFER_TYPE S_L = slotValid ? CU_SLOT_PAIRING_CAPACITY_16 : 0;
 #endif
 
 #ifdef _CUDA_USE_SHARED_MEMORY_IN_SLOTPAIRING
-	__shared__ CU_SLOT_BUFFER_TYPE memType[CU_SLOTS_PER_WORK][CU_SLOT_CAPACITY_16];//write via shared memory.
-	__shared__ CU_SLOT_BUFFER_TYPE memZcrd[CU_SLOTS_PER_WORK][CU_SLOT_CAPACITY_16];
-	__shared__ CU_SLOT_BUFFER_TYPE memZnrm[CU_SLOTS_PER_WORK][CU_SLOT_CAPACITY_16];
+	__shared__ CU_SLOT_BUFFER_TYPE memType[CU_SLOTS_PER_WORK][CU_SLOT_PAIRING_CAPACITY_16];//write via shared memory.
+	__shared__ CU_SLOT_BUFFER_TYPE memZcrd[CU_SLOTS_PER_WORK][CU_SLOT_PAIRING_CAPACITY_16];
+	__shared__ CU_SLOT_BUFFER_TYPE memZnrm[CU_SLOTS_PER_WORK][CU_SLOT_PAIRING_CAPACITY_16];
 
-	if (thIDx < CU_SLOT_CAPACITY_16) {
+	if (thIDx < CU_SLOT_PAIRING_CAPACITY_16) {
 		memType[thIDy][thIDx] = 0;		memZcrd[thIDy][thIDx] = 0;		memZnrm[thIDy][thIDx] = 0;
 	}
 	__syncthreads();
@@ -254,8 +254,7 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 
 #ifdef _TURN_ON_PAIRING_STEP_1
 	//#1. sortSlotByZ()
-	//odd-even transposition sort finishes in max(slotLen) passes; with CAPACITY=256
-	//running all 256 passes for mostly-short slots would waste ~4x sync/compute.
+	//odd-even transposition sort only needs the CPU-regime post-truncation rows.
 	__shared__ int sortPasses;
 	if (thIDx == 0 && thIDy == 0) { sortPasses = 0; }
 	__syncthreads();
@@ -291,7 +290,7 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 	{
 #ifndef _CUDA_USE_SPLIT_AL_BE_IN_VOXELIZE_STEP
 		//per-BLOCK operation +++++++++++++++
-		if (thIDx < CU_SLOT_CAPACITY_16) {//Omit lateral-face points(nZ==0).
+		if (thIDx < CU_SLOT_PAIRING_CAPACITY_16) {//Omit lateral-face points(nZ==0).
 			if (memZnrm[thIDy][thIDx] > 10) { cu_Or(&memType[thIDy][thIDx] , typeAl); }
 			else if (memZnrm[thIDy][thIDx] < -10) { cu_Or(&memType[thIDy][thIDx] , typeBe); }
 		}
@@ -421,7 +420,7 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 			}
 		}
 
-		if (bExplicitPairStarted && slotLen < CU_SLOT_CAPACITY_16)
+		if (bExplicitPairStarted && slotLen < CU_SLOT_PAIRING_CAPACITY_16)
 		{
 			int bottomIdx = slotLen;
 			cu_Add(memNPxl + thIDy, 1);
@@ -433,7 +432,7 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 			cu_Exch(memZcrd[thIDy] + bottomIdx, 0);
 			cu_Exch(memZnrm[thIDy] + bottomIdx, 0);
 		}
-		if (bImplicitPairStarted && slotLen < CU_SLOT_CAPACITY_16)
+		if (bImplicitPairStarted && slotLen < CU_SLOT_PAIRING_CAPACITY_16)
 		{
 			int bottomIdx = slotLen;
 			cu_Add(memNPxl + thIDy, 1);
@@ -492,7 +491,7 @@ template<typename T> __global__ void cu_slotPairing_Streamed(
 #ifdef _CUDA_USE_NONZERO_SLOTBUFFER_ONLY
 	if (bWriteBack && thIDx < S_L[thIDy]) { //write back.
 #else
-	if (slotValid && bWriteBack && thIDx < min(slotLenPair[thIDy] + 2, (CU_SLOT_BUFFER_TYPE)CU_SLOT_CAPACITY_16)) { //write back pairing results (+2: bottom SSA/NVA pixels appended by the brief path).
+	if (slotValid && bWriteBack && thIDx < min(slotLenPair[thIDy] + 2, (CU_SLOT_BUFFER_TYPE)CU_SLOT_PAIRING_CAPACITY_16)) { //write back pairing results (+2: bottom SSA/NVA pixels appended by the brief path).
 #endif
 		cu_pType[uliSlotDataIdx + thIDy * CU_SLOT_CAPACITY_16 + thIDx] = memType[thIDy][thIDx];
 		cu_pZcrd[uliSlotDataIdx + thIDy * CU_SLOT_CAPACITY_16 + thIDx] = memZcrd[thIDy][thIDx];

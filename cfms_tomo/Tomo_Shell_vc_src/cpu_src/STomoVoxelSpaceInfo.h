@@ -1,5 +1,6 @@
 #pragma once
 #include "STPSlot.h"
+#include <vector>
 
 using namespace Tomo;
 
@@ -35,12 +36,18 @@ public:
   //mem size: https://docs.microsoft.com/ko-kr/cpp/cpp/data-type-ranges?view=msvc-170
   //unsigned int = 4byte,  , SLOT_BUFFER_TYPE = 1 byte
   //const int nSlotBufMaxHeight = 36;//max. ray-mesh intersection number. assumption.
-  //const int nSlotBufWidth = 3;// 0th row stores nPxl only; Vo/Vss sums are int32 side buffers.
-  SLOT_BUFFER_TYPE* SlotBuf_108f;//3*8 bits  for voxel,  3 bytes * X_D * Y_D * nMaxZDepth. ºñ¾î ÀÖÁö ¾ÊÀº ÇÈ¼¿°ª¸¸ ¸ð¾Æ¼­ ÀúÀå.
-
-  SLOT_SUM_TYPE* SlotVo_32i;
-  SLOT_SUM_TYPE* SlotVss_32i;
+  //const int nSlotBufWidth = 3;// 0th row stores nPxl only.
+  SLOT_BUFFER_TYPE* SlotBuf_108f;//3*8 bits  for voxel,  3 bytes * X_D * Y_D * nMaxZDepth. ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¼ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Æ¼ï¿½ ï¿½ï¿½ï¿½ï¿½.
   void  InitSlotBuf(void);
+
+  //Per-direction we only ever write a small subset of the X_D*Y_D slots (the mesh
+  //silhouette + bed). Re-memset-ing the whole 6MB SlotBuf every direction was ~49% of
+  //CPU time. Instead we record each slot the moment it goes empty->non-empty and, at the
+  //start of the next direction, zero only those slots. ClearDirtySlots() must leave the
+  //buffer in the same all-zero state InitSlotBuf() would (type column is written with |=,
+  //so a stale non-zero payload would corrupt the next direction).
+  std::vector<VOXEL_ID_TYPE> dirtySlots;
+  void  ClearDirtySlots(void);
 
   void  SetBit_Type(SLOT_BUFFER_TYPE* slot_buf, unsigned int _ID, unsigned int slotXYZ[3],
       int pxl_z, int pxl_nZ_100, int _typeByte);

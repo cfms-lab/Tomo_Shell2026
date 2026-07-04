@@ -28,7 +28,8 @@ public:
   TPVector   GetSSPixels(bool _bUseExplicitSS);//rendering
   TPVector  slotsToPxls(enumPixelType _type);//for rendering. time consuming. 
 
-  void  vslotPair(const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, FLOAT32 theta_c);
+  void  vslotPair(const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, FLOAT32 theta_c,
+    SLOT_SUM_TYPE& slotVo, SLOT_SUM_TYPE& slotVss);
 
   int  triVoxel(
     FLOAT32* _v0,
@@ -63,9 +64,9 @@ public:
     size_t  createShadowCastor( const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, FLOAT32 theta_c, bool _bUseExplicitSS=false);
     void  createShadowAcceptor( const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, int nvb_type_byte, int nva_type_byte);
       
-    void  createVoPixels(       const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot);
-    void  createVss_Explicit(   const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot);
-    void  createVss_Implicit(   const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot);
+    SLOT_SUM_TYPE  createVoPixels(       const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot);
+    SLOT_SUM_TYPE  createVss_Explicit(   const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot);
+    SLOT_SUM_TYPE  createVss_Implicit(   const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot);
   
   void  matchAlBePairBriefly(const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot);
   void  createShadowBriefly(const size_t S_W, SLOT_BUFFER_TYPE& S_L, SLOT_BUFFER_TYPE* curr_Pxl_slot, FLOAT32 theta_c);

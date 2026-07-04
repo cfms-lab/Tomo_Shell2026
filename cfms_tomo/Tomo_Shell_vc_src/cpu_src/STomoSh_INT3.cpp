@@ -3,6 +3,7 @@
 #include "SMatrix4f.h"
 #include <cstdlib>
 #include <cstdio>
+#include <algorithm>
 
 
 using namespace Tomo;
@@ -125,6 +126,49 @@ static bool tomoDebugPairOutputEnabled()
   return enabled;
 }
 
+static void tomoCalcCpuSlotPairSums(
+  const STomoSh_INT3* tomo,
+  SLOT_BUFFER_TYPE slotLen,
+  SLOT_BUFFER_TYPE* slot,
+  SLOT_SUM_TYPE& vo,
+  SLOT_SUM_TYPE& vss)
+{
+  vo = 0;
+  vss = 0;
+  if (slotLen <= 1) return;
+
+  const int S_W = tomo->voxel_info.nSlotCapacityWidth;
+  SLOT_SUM_TYPE al_sum = 0, be_sum = 0;
+  SLOT_SUM_TYPE ssb_sum = 0, ssa_sum = 0;
+  SLOT_SUM_TYPE TC_sum = 0, NVB_sum = 0, NVA_sum = 0;
+
+  for (int p = 0; p < slotLen; p++)
+  {
+    SLOT_BUFFER_TYPE p_type = *(slot + (p + 1) * S_W + 0);
+    SLOT_SUM_TYPE p_z = *(slot + (p + 1) * S_W + 1);
+
+    if (p_type & typeAl)
+    {
+      al_sum += p_z;
+      if (p_type & typeTC)  { TC_sum += p_z; }
+      if (p_type & typeNVA) { NVA_sum += p_z; }
+    }
+    else if (p_type & typeBe)
+    {
+      be_sum += p_z;
+      if (p_type & typeNVB) { NVB_sum += p_z; }
+    }
+
+    if (p_type & typeSSB) { ssb_sum += p_z; }
+    else if (p_type & typeSSA) { ssa_sum += p_z; }
+  }
+
+  vo = (al_sum > be_sum) ? (al_sum - be_sum) : 0;
+  vss = tomo->printer_info.bUseExplicitSS
+    ? (ssb_sum - ssa_sum)
+    : (-al_sum + be_sum + TC_sum - NVB_sum + NVA_sum);
+}
+
 static void tomoDebugPrintCpuPairOutput(const STomoSh_INT3* tomo)
 {
   static int callNo = 0;
@@ -146,8 +190,9 @@ static void tomoDebugPrintCpuPairOutput(const STomoSh_INT3* tomo)
   for (int slotX = 0; slotX < X_D; slotX++) {
     for (int slotY = 0; slotY < Y_D; slotY++) {
       int slotID = slotX * Y_D + slotY;
-      SLOT_SUM_TYPE vo = tomo->voxel_info.SlotVo_32i[slotID];
-      SLOT_SUM_TYPE vss = tomo->voxel_info.SlotVss_32i[slotID];
+      SLOT_BUFFER_TYPE* slot = tomo->voxel_info.SlotBuf_108f + slotID * S_W * S_H;
+      SLOT_SUM_TYPE vo = 0, vss = 0;
+      tomoCalcCpuSlotPairSums(tomo, slot[0], slot, vo, vss);
       voSum += vo;
       vssSum += vss;
       if (vo != 0) nonzeroVo++;
@@ -168,8 +213,8 @@ static void tomoDebugPrintCpuPairOutput(const STomoSh_INT3* tomo)
           int slotID = slotX * Y_D + slotY;
           SLOT_BUFFER_TYPE* slot = tomo->voxel_info.SlotBuf_108f + slotID * S_W * S_H;
           int S_L = slot[0];
-          SLOT_SUM_TYPE vo = tomo->voxel_info.SlotVo_32i[slotID];
-          SLOT_SUM_TYPE vss = tomo->voxel_info.SlotVss_32i[slotID];
+          SLOT_SUM_TYPE vo = 0, vss = 0;
+          tomoCalcCpuSlotPairSums(tomo, S_L, slot, vo, vss);
           std::fprintf(fp, "%d,%d,%d,%d,%d,%d,-1,0,0,0\n", slotID, slotX, slotY, S_L, vo, vss);
           for (int p = 0; p < S_L; p++) {
             const int typ = slot[(p + 1) * S_W + 0];
@@ -239,7 +284,7 @@ void  STomoSh_INT3::Rotate(void)
 
 void  STomoSh_INT3::Pixelize()
 {
-  voxel_info.InitSlotBuf();
+  voxel_info.ClearDirtySlots();//zero only last direction's touched slots (was: full 6MB memset)
 
   static int tomoTriHitCallNo = 0;
   int tomoThisTriHitCall = tomoTriHitCallNo++;
@@ -314,7 +359,7 @@ for (MESH_ELE_ID_TYPE t = 0; t < printer_info.nTri; t++)
 #endif
       voxel_info.SlotBuf_108f);
     if (tomoTriHitFile != nullptr) std::fprintf(tomoTriHitFile, "%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n", (int)t, tomoHits, printer_info.pVtx1[t0 * 3 + 0], printer_info.pVtx1[t0 * 3 + 1], printer_info.pVtx1[t1 * 3 + 0], printer_info.pVtx1[t1 * 3 + 1], printer_info.pVtx1[t2 * 3 + 0], printer_info.pVtx1[t2 * 3 + 1]);
-  }
+  }
   if (tomoTriHitFile != nullptr) fclose(tomoTriHitFile);
 }
 
@@ -327,16 +372,23 @@ void  STomoSh_INT3::Pairing(void)//CUDA nvcc compatible version slot-pairing
   int Z_D = voxel_info.z_dim;
   int S_W = voxel_info.nSlotCapacityWidth;
   int S_H = voxel_info.nSlotCapacityHeight;
-  for (int slotX = 0; slotX < X_D; slotX++)
+  vm_info.Vo = 0;
+  vm_info.Vss = 0;
+  //Only occupied slots need pairing; the full X_D*Y_D scan re-read slot headers across the whole
+  //6MB buffer every direction. Iterate the recorded dirty (occupied) slots instead. Sort ascending
+  //so the int->float Vo/Vss accumulation happens in the same slotID order as the old row-major scan
+  //(float sums aren't associative; this keeps results bit-identical for large volumes too).
+  std::sort(voxel_info.dirtySlots.begin(), voxel_info.dirtySlots.end());
+  for (size_t i = 0; i < voxel_info.dirtySlots.size(); i++)
   {
-    for (int slotY = 0; slotY < Y_D; slotY++)
+    SLOT_BUFFER_TYPE* curr_Pxl_slot = voxel_info.SlotBuf_108f + voxel_info.dirtySlots[i] * S_W * S_H;//pointer to current slot
+    SLOT_BUFFER_TYPE& n_pixels_in_curr_slot = *(curr_Pxl_slot + 0);//number of pixels in the current slot. Can be modififd in the sub-functions.
+    if(n_pixels_in_curr_slot>1)
     {
-      SLOT_BUFFER_TYPE* curr_Pxl_slot = voxel_info.SlotBuf_108f + (slotX * Y_D + slotY) * S_W * S_H;//pointer to current slot
-      SLOT_BUFFER_TYPE& n_pixels_in_curr_slot = *(curr_Pxl_slot + 0);//number of pixels in the current slot. Can be modififd in the sub-functions.
-      if(n_pixels_in_curr_slot>1)
-      {
-        vslotPair(S_W, n_pixels_in_curr_slot, curr_Pxl_slot, printer_info.theta_c);
-      }
+      SLOT_SUM_TYPE slotVo = 0, slotVss = 0;
+      vslotPair(S_W, n_pixels_in_curr_slot, curr_Pxl_slot, printer_info.theta_c, slotVo, slotVss);
+      vm_info.Vo += slotVo;
+      vm_info.Vss += slotVss;
     }
   }
   tomoDebugPrintCpuPairOutput(this);
@@ -361,7 +413,7 @@ void  STomoSh_INT3::sortSlotByZ(
   SLOT_BUFFER_TYPE *temp_buf = new SLOT_BUFFER_TYPE[S_W * S_L + 2];
   for (int p = 0; p < S_L; p++)
   {
-    size_t new_p = index[S_L-1-p];//z°ª ³»¸²Â÷¼ø.
+    size_t new_p = index[S_L-1-p];//zï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½.
     temp_buf[p * S_W + 0] = *(curr_Pxl_slot + (new_p + 1) * S_W + 0);
     temp_buf[p * S_W + 1] = *(curr_Pxl_slot + (new_p + 1) * S_W + 1);
     temp_buf[p * S_W + 2] = *(curr_Pxl_slot + (new_p + 1) * S_W + 2);
@@ -417,7 +469,7 @@ void  STomoSh_INT3::removeZNearPxls(
   const size_t S_W/*slot width, always 3*/,
   SLOT_BUFFER_TYPE& S_L/*slot length. n_pixels_in_curr_slot*/,
   SLOT_BUFFER_TYPE* curr_Pxl_slot, int typeByte)
-{ //°°Àº typeÀÎµ¥ z°ªÀÌ +1ÀÎ ÀÌ¿ô ÇÈ¼¿À» »èÁ¦.
+{ //ï¿½ï¿½ï¿½ï¿½ typeï¿½Îµï¿½ zï¿½ï¿½ï¿½ï¿½ +1ï¿½ï¿½ ï¿½Ì¿ï¿½ ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½.
   for( int p = 0 ; p < S_L-1 ; p++)
   {
     SLOT_BUFFER_TYPE p_type = *(curr_Pxl_slot + (p+1)*S_W + 0);
@@ -449,7 +501,7 @@ void  STomoSh_INT3::splitAlBe(
     SLOT_BUFFER_TYPE pxl_z      = *(curr_Pxl_slot + (p + 1) * S_W + 1);
     SLOT_BUFFER_TYPE pxl_nZ     = *(curr_Pxl_slot + (p + 1) * S_W + 2);
 
-    if(pxl_nZ * g_fNORMALFACTOR > g_fMARGIN * 10.)//nz==0. Áï ¿·¸é¿¡ ÀÖ´Â °ÍµéÀº ¹ö¸°´Ù.
+    if(pxl_nZ * g_fNORMALFACTOR > g_fMARGIN * 10.)//nz==0. ï¿½ï¿½ ï¿½ï¿½ï¿½é¿¡ ï¿½Ö´ï¿½ ï¿½Íµï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½.
     {
       pxl_type |= typeAl;
     }
@@ -536,7 +588,7 @@ void  STomoSh_INT3::matchAlBePairBriefly(
   if (S_L < 2) return;
 
 #if 1
-  //³ëÀÌÁî´Â Áö¿ìÁö ¸»°í, (al,be)½ÖÀÌ ¾Æ´Ñ°Ç typeÀ» 0À¸·Î Áö¿î´Ù.
+  //ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½, (al,be)ï¿½ï¿½ï¿½ï¿½ ï¿½Æ´Ñ°ï¿½ typeï¿½ï¿½ 0ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½.
   bool _b_P_started = false;
   int n_delete=0;
   for (int p = 0; p < S_L ; p++)
@@ -545,20 +597,20 @@ void  STomoSh_INT3::matchAlBePairBriefly(
 
     if (!_b_P_started && p_type == typeAl)
     {
-      _b_P_started = true;//±¸°£ ½ÃÀÛ. ³öµÐ´Ù.
+      _b_P_started = true;//ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½. ï¿½ï¿½ï¿½Ð´ï¿½.
     }
     else if (_b_P_started && p_type == typeBe)
     {
-      _b_P_started = false;//±¸°£ ³¡. ³öµÐ´Ù.
+      _b_P_started = false;//ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½. ï¿½ï¿½ï¿½Ð´ï¿½.
     }
     else if(p_type == typeAl || p_type == typeBe)
     {
-      p_type = 0;//³ëÀÌÁî. Áö¿î´Ù.
+      p_type = 0;//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½. ï¿½ï¿½ï¿½ï¿½ï¿½.
       n_delete++;
     }
   }
 #else
-  //¿ø·¡ ¹öÀüÀ» 2-pass·Î ÇÑ °Í. ³ëÀÌÁî ¾à°£ ÀÖÀ½.
+  //ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 2-passï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½. ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½à°£ ï¿½ï¿½ï¿½ï¿½.
   std::vector<std::pair<int, int>> PQ_pairs;
 
   bool _b_P_started = false;
@@ -581,13 +633,13 @@ void  STomoSh_INT3::matchAlBePairBriefly(
     }
   }
 
-  if(_b_P_started)//¸¶Áö¸· ¹Ù´Ú¸é Ã³¸®
+  if(_b_P_started)//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ù´Ú¸ï¿½ Ã³ï¿½ï¿½
   {
-    std::pair<int, int> new_pair = std::make_pair(index_p, S_L);//¸¶Áö¸· ¼¿ È°¿ë. 0ÀÌ µé¾îÀÖ°ÚÁö.
+    std::pair<int, int> new_pair = std::make_pair(index_p, S_L);//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ È°ï¿½ï¿½. 0ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Ö°ï¿½ï¿½ï¿½.
     PQ_pairs.push_back(new_pair);
   }
 
-  //dump. ¿ø·¡ µ¥ÀÌÅÍ¸¦ ´Ù Áö¿ì°í, PQ_pairs°ªµé·Î µ¤¾î¾´´Ù.
+  //dump. ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Í¸ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½, PQ_pairsï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½î¾´ï¿½ï¿½.
   int n_pair= 0 ;
   for( auto& pair : PQ_pairs)
   {
@@ -647,7 +699,7 @@ void  STomoSh_INT3::matchPairNumber_Al_Be(
   SLOT_BUFFER_TYPE* curr_Pxl_slot)
 {
   //check if alphas and betas have same number, assuming the input object is a closed volume.
-  //alpha-betaÀÇ °¹¼ö¸¦ ¸ÂÃã.¾È ¸ÂÀ¸¸é al´Â z°ª ³ôÀº ÂÊ, be´Â ³·Àº ÂÊÀ» »èÁ¦.
+  //alpha-betaï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½.ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ alï¿½ï¿½ zï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½, beï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½.
   size_t n_al = countType(S_W, S_L, curr_Pxl_slot, typeAl);
   size_t n_be = countType(S_W, S_L, curr_Pxl_slot, typeBe);
 
@@ -700,7 +752,7 @@ void  STomoSh_INT3::createShadowBriefly(
   SLOT_BUFFER_TYPE* curr_Pxl_slot,
   FLOAT32 theta_c_Radian
   )
-{//BeÇÈ¼¿Áß¿¡¼­ ÀÓ°è°¢ Á¶°ÇÀ» ¸¸Á·ÇÏ¸é espNVB bit°ªÀ» Ãß°¡ÇÑ´Ù.
+{//Beï¿½È¼ï¿½ï¿½ß¿ï¿½ï¿½ï¿½ ï¿½Ó°è°¢ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ï¸ï¿½ espNVB bitï¿½ï¿½ï¿½ï¿½ ï¿½ß°ï¿½ï¿½Ñ´ï¿½.
   FLOAT32 threshold = FLOAT32(-1. * ::sin(theta_c_Radian));
 
   bool _bPairStarted = false;
@@ -710,8 +762,8 @@ void  STomoSh_INT3::createShadowBriefly(
   {
     SLOT_BUFFER_TYPE& p_type = *(curr_Pxl_slot + (p + 1) * S_W + 0);
     FLOAT32      p_nZ   = *(curr_Pxl_slot + (p + 1) * S_W + 2) / g_fNORMALFACTOR;
-     //explicit, implicit ±¸ºÐ¾øÀÌ NV, SS¸¦ µ¿½Ã¿¡ Ã³¸®.
-    if ((p_type & typeBe) && (p_nZ < g_fMARGIN))//beta ÇÈ¼¿ ½ÃÀÛ
+     //explicit, implicit ï¿½ï¿½ï¿½Ð¾ï¿½ï¿½ï¿½ NV, SSï¿½ï¿½ ï¿½ï¿½ï¿½Ã¿ï¿½ Ã³ï¿½ï¿½.
+    if ((p_type & typeBe) && (p_nZ < g_fMARGIN))//beta ï¿½È¼ï¿½ ï¿½ï¿½ï¿½ï¿½
     {
       if (!bExplicitPairStarted && p_nZ < threshold)
       {
@@ -735,24 +787,24 @@ void  STomoSh_INT3::createShadowBriefly(
     }
   }
 
-  if (bExplicitPairStarted)//¸ø Ã£¾ÒÀ¸¸é ¹Ù´ÚÀ» NVA·Î ÁöÁ¤.
+  if (bExplicitPairStarted)//ï¿½ï¿½ Ã£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ù´ï¿½ï¿½ï¿½ NVAï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½.
   {
   //Note: the floor sentinel has z=0, so skipping it when the slot is full does not
   //change the Vss sums; writing past the slot end would corrupt the next slot's
   //header (count |= typeSSA/typeNVA), which is what broke dense meshes (mss=0).
     if (S_L < voxel_info.nSlotCapacityHeight - 1)
     {
-       *(curr_Pxl_slot + (S_L + 1) * S_W + 0) |=typeSSA; //ºó ½½·Ô¿¡ 0À» ³Ö°í.
-       S_L++;//½½·Ô Å©±â¸¦ Áõ°¡.
+       *(curr_Pxl_slot + (S_L + 1) * S_W + 0) |=typeSSA; //ï¿½ï¿½ ï¿½ï¿½ï¿½Ô¿ï¿½ 0ï¿½ï¿½ ï¿½Ö°ï¿½.
+       S_L++;//ï¿½ï¿½ï¿½ï¿½ Å©ï¿½â¸¦ ï¿½ï¿½ï¿½ï¿½.
     }
      bExplicitPairStarted = false;
   }
-  if (bImplicitPairStarted)//¸ø Ã£¾ÒÀ¸¸é ¹Ù´ÚÀ» NVA·Î ÁöÁ¤.
+  if (bImplicitPairStarted)//ï¿½ï¿½ Ã£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ù´ï¿½ï¿½ï¿½ NVAï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½.
   {
     if (S_L < voxel_info.nSlotCapacityHeight - 1)
     {
       *(curr_Pxl_slot + (S_L + 1) * S_W + 0) |= typeNVA;
-      S_L++;//½½·Ô Å©±â¸¦ Áõ°¡.
+      S_L++;//ï¿½ï¿½ï¿½ï¿½ Å©ï¿½â¸¦ ï¿½ï¿½ï¿½ï¿½.
     }
     bImplicitPairStarted = false;
   }
@@ -766,7 +818,7 @@ size_t  STomoSh_INT3::createShadowCastor(
   SLOT_BUFFER_TYPE* curr_Pxl_slot,
   FLOAT32 theta_c_Radian,
   bool _bUseExplicitSS)
-{//BeÇÈ¼¿Áß¿¡¼­ ÀÓ°è°¢ Á¶°ÇÀ» ¸¸Á·ÇÏ¸é espNVB bit°ªÀ» Ãß°¡ÇÑ´Ù.
+{//Beï¿½È¼ï¿½ï¿½ß¿ï¿½ï¿½ï¿½ ï¿½Ó°è°¢ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ï¸ï¿½ espNVB bitï¿½ï¿½ï¿½ï¿½ ï¿½ß°ï¿½ï¿½Ñ´ï¿½.
   FLOAT32 threshold = FLOAT32 (-1. * ::sin(theta_c_Radian));
 
   int n_castor = 0;
@@ -796,7 +848,7 @@ size_t  STomoSh_INT3::matchPairNumber_SS(
   SLOT_BUFFER_TYPE* curr_Pxl_slot,
   int nvb_type_byte, int be_type_byte)
 { //compare the number of two types. if there are more NVB than be, delete NVB with lower z values.
-  //NVBÀÇ °¹¼ö°¡ Beº¸´Ù ¸¹À¸¸é z°ª ÀÛÀº ¼øÀ¸·Î »èÁ¦ÇÑ´Ù.
+  //NVBï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Beï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ zï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ñ´ï¿½.
   size_t n_NVB = countType(S_W, S_L, curr_Pxl_slot, nvb_type_byte);
   size_t n_be  = countType(S_W, S_L, curr_Pxl_slot, be_type_byte);
 
@@ -852,7 +904,7 @@ void  STomoSh_INT3::createShadowAcceptor(
   SLOT_BUFFER_TYPE* curr_Pxl_slot,
   int shadow_castor, int shadow_acceptor)
 {
-  //BeÇÈ¼¿ÀÇ z°ª ¾Æ·¡ ¹æÇâÀ¸·Î Ã¹¹øÂ° ¹ß°ßµÇ´Â alÇÈ¼¿À», ¾øÀ¸¸é ¹Ù´ÚÀ» nva_type_byte·Î ºñÆ® ÁöÁ¤ÇÑ´Ù.
+  //Beï¿½È¼ï¿½ï¿½ï¿½ zï¿½ï¿½ ï¿½Æ·ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Ã¹ï¿½ï¿½Â° ï¿½ß°ßµÇ´ï¿½ alï¿½È¼ï¿½ï¿½ï¿½, ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ù´ï¿½ï¿½ï¿½ nva_type_byteï¿½ï¿½ ï¿½ï¿½Æ® ï¿½ï¿½ï¿½ï¿½ï¿½Ñ´ï¿½.
   for (int p = 0; p < S_L; p++)
   {
     SLOT_BUFFER_TYPE p_type = *(curr_Pxl_slot + (p + 1) * S_W + 0);
@@ -869,7 +921,7 @@ void  STomoSh_INT3::createShadowAcceptor(
           q_type |= shadow_acceptor; bFoundNVA = true;  q = S_L;//exit loop
         }
       }
-      if(!bFoundNVA)//¸ø Ã£¾ÒÀ¸¸é ¹Ù´ÚÀ» NVA·Î ÁöÁ¤.
+      if(!bFoundNVA)//ï¿½ï¿½ Ã£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ù´ï¿½ï¿½ï¿½ NVAï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½.
       {
         /**(curr_Pxl_slot + (S_L + 1) * S_W + 0) = nva_type_byte; S_L++;*/
         insertPxl(S_W, S_L, curr_Pxl_slot, shadow_acceptor, 0, 0);
@@ -879,12 +931,12 @@ void  STomoSh_INT3::createShadowAcceptor(
 }
 
 
-void  STomoSh_INT3::createVoPixels(
+SLOT_SUM_TYPE  STomoSh_INT3::createVoPixels(
   const size_t S_W/*slot width, always 3*/,
   SLOT_BUFFER_TYPE& S_L/*slot length. n_pixels_in_curr_slot*/,
   SLOT_BUFFER_TYPE* curr_Pxl_slot)
 {//calculate Vo value from (al - be), and insert a pixel.
-  //(Al - Be)¸¦ ÅëÇØ Vo°ªÀ» °è»êÇÏ°í, ·»´õ¸µÀ» À§ÇØ ½½·Ô¿¡ ÇÈ¼¿À» Ãß°¡ÇÑ´Ù.
+  //(Al - Be)ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Voï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Ï°ï¿½, ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ô¿ï¿½ ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ß°ï¿½ï¿½Ñ´ï¿½.
   SLOT_SUM_TYPE al_sum = 0, be_sum = 0;
   for (int p = 0; p < S_L ; p++)
   {
@@ -900,19 +952,19 @@ void  STomoSh_INT3::createVoPixels(
     }
   }
 
-  SLOT_SUM_TYPE Vo_z = (al_sum > be_sum) ? (al_sum - be_sum) : 0;//°¡²û ³ëÀÌÁî·Î ÀÎÇØ ¸¶ÀÌ³Ê½º °ªÀÌ ³ª¿Ã ¼ö ÀÖ´Ù.
+  SLOT_SUM_TYPE Vo_z = (al_sum > be_sum) ? (al_sum - be_sum) : 0;//ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ì³Ê½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½Ö´ï¿½.
 #ifndef _USE_BRIEF_SLOT_PAIRING
   insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::eptVo), clampSlotSumToBuffer(Vo_z), 0);
 #endif
-  voxel_info.SlotVo_32i[slotIDFromPtr(S_W, curr_Pxl_slot)] = Vo_z;
+  return Vo_z;
 }
 
-void  STomoSh_INT3::createVss_Explicit(
+SLOT_SUM_TYPE  STomoSh_INT3::createVss_Explicit(
   const size_t S_W/*slot width, always 3*/,
   SLOT_BUFFER_TYPE& S_L/*slot length. n_pixels_in_curr_slot*/,
   SLOT_BUFFER_TYPE* curr_Pxl_slot)
 {//calculate Vss value from (ssb - ssa). and insert a pixel
-  //(SSB - SSA)¸¦ ÅëÇØ SS°ªÀ» ±¸ÇÏ°í, ·»´õ¸µÀ» À§ÇØ ÇÈ¼¿À» Ãß°¡ÇÑ´Ù.
+  //(SSB - SSA)ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ SSï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ï°ï¿½, ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ß°ï¿½ï¿½Ñ´ï¿½.
 
   SLOT_SUM_TYPE ssb_sum = 0, ssa_sum = 0;
 
@@ -930,16 +982,16 @@ void  STomoSh_INT3::createVss_Explicit(
   if (Vss_z != 0)//hide zero-height pixel, for pretty rendering
   {  insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::eptVss), clampSlotSumToBuffer(Vss_z), 0); }
 #endif
-  voxel_info.SlotVss_32i[slotIDFromPtr(S_W, curr_Pxl_slot)] = Vss_z;//ÇÕ»êÀ» À§ÇØ ¹öÆÛ¿¡ ±â·Ï.
+  return Vss_z;
 
 }
 
-void  STomoSh_INT3::createVss_Implicit(
+SLOT_SUM_TYPE  STomoSh_INT3::createVss_Implicit(
   const size_t S_W/*slot width, always 3*/,
   SLOT_BUFFER_TYPE& S_L/*slot length. n_pixels_in_curr_slot*/,
   SLOT_BUFFER_TYPE* curr_Pxl_slot)
 { //calculate Vss value from (-al + be + TC - NVB + NBA). and insert a pixel
-  //(-al + be + TC - NVB + NBA)¸¦ ÅëÇØ Vss°ªÀ» ±¸ÇÏ°í, ·»´õ¸µÀ» À§ÇØ ÇÈ¼¿À» Ãß°¡ÇÑ´Ù.
+  //(-al + be + TC - NVB + NBA)ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Vssï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ï°ï¿½, ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½È¼ï¿½ï¿½ï¿½ ï¿½ß°ï¿½ï¿½Ñ´ï¿½.
   SLOT_SUM_TYPE al_sum = 0, be_sum = 0, TC_sum = 0, NVB_sum = 0, NVA_sum = 0;
 
 
@@ -968,8 +1020,7 @@ void  STomoSh_INT3::createVss_Implicit(
     insertPxl(S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::eptVss), clampSlotSumToBuffer(Vss_z), 0);
   }
 #endif
-
-  voxel_info.SlotVss_32i[slotIDFromPtr(S_W, curr_Pxl_slot)] = Vss_z;//ÇÕ»êÀ» À§ÇØ ¹öÆÛ¿¡ ±â·Ï.
+  return Vss_z;
 
 }
 
@@ -991,19 +1042,23 @@ void  STomoSh_INT3::vslotPair(
   const size_t S_W/*slot width, always 3*/,
   SLOT_BUFFER_TYPE& S_L /*slot length. n_pixels_in_curr_slot*/,
   SLOT_BUFFER_TYPE* curr_Pxl_slot,
-  FLOAT32 theta_c)
+  FLOAT32 theta_c,
+  SLOT_SUM_TYPE& slotVo,
+  SLOT_SUM_TYPE& slotVss)
 {
+  slotVo = 0;
+  slotVss = 0;
 #ifdef _USE_BRIEF_SLOT_PAIRING
   createAlBePxls(S_W, S_L, curr_Pxl_slot);
   matchAlBePairBriefly(S_W, S_L, curr_Pxl_slot);
-  createVoPixels(S_W, S_L, curr_Pxl_slot);//calculate object volume from V_al - V_be.
+  slotVo = createVoPixels(S_W, S_L, curr_Pxl_slot);//calculate object volume from V_al - V_be.
   createShadowBriefly(S_W, S_L, curr_Pxl_slot, theta_c);//create NVB, SSB simultaensouly.
 
   if (printer_info.bUseExplicitSS)
-  { createVss_Explicit(S_W, S_L, curr_Pxl_slot); }//Vss = sum of SS pixels' z values
+  { slotVss = createVss_Explicit(S_W, S_L, curr_Pxl_slot); }//Vss = sum of SS pixels' z values
   else
   { createTCPixels(S_W, S_L, curr_Pxl_slot);//find top-covering pixels. the first-coming alpha pixel.
-    createVss_Implicit(S_W, S_L, curr_Pxl_slot);}//Vss = -V_al + V_be + V_tc + V_nvb - V_nva
+    slotVss = createVss_Implicit(S_W, S_L, curr_Pxl_slot);}//Vss = -V_al + V_be + V_tc + V_nvb - V_nva
   
 #else
   //At the start, each slot has only alpha and beta pixels only.
@@ -1013,7 +1068,7 @@ void  STomoSh_INT3::vslotPair(
   matchAlBeAlternation(     S_W, S_L, curr_Pxl_slot);//check if alpha-beta-alpha-beta-... alternation order is right.
   matchPairNumber_Al_Be(    S_W, S_L, curr_Pxl_slot);//check if alphas and betas have same number, assuming the input object is a closed volume.
 
-  createVoPixels(           S_W, S_L, curr_Pxl_slot);//calculate object volume from V_al - V_be.
+  slotVo = createVoPixels(           S_W, S_L, curr_Pxl_slot);//calculate object volume from V_al - V_be.
 
   if (printer_info.bUseExplicitSS)
   {
@@ -1024,7 +1079,7 @@ void  STomoSh_INT3::vslotPair(
       createShadowAcceptor( S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::espSSB), toTypeByte(enumPixelType::espSSA));//find end point of shadows.
       matchPairNumber_SS(   S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::espSSB), toTypeByte(enumPixelType::espBe));//delete noise
     }
-    createVss_Explicit(     S_W, S_L, curr_Pxl_slot);//Vss = sum of SS pixels' z values
+    slotVss = createVss_Explicit(     S_W, S_L, curr_Pxl_slot);//Vss = sum of SS pixels' z values
   }
   else
   {
@@ -1037,7 +1092,7 @@ void  STomoSh_INT3::vslotPair(
       createShadowAcceptor( S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::espNVB), toTypeByte(enumPixelType::espNVA));//find end point of NV pixels.
       matchPairNumber_SS(   S_W, S_L, curr_Pxl_slot, toTypeByte(enumPixelType::espNVB), toTypeByte(enumPixelType::espBe));//delete noise
     }
-    createVss_Implicit(     S_W, S_L, curr_Pxl_slot);//Vss = -V_al + V_be + V_tc + V_nvb - V_nva
+    slotVss = createVss_Implicit(     S_W, S_L, curr_Pxl_slot);//Vss = -V_al + V_be + V_tc + V_nvb - V_nva
   }
 #endif
 
@@ -1059,11 +1114,11 @@ TPVector  STomoSh_INT3::slotsToPxls(enumPixelType _enum_type)//send data to pyth
   {
     for (int slotY = 0; slotY < Y_D; slotY++)
     {
-      VOXEL_ID_TYPE slot_start_pos = (slotX * Y_D + slotY) * S_W * S_H;//ÁÖÀÇ: type_buffer³»ºÎÀÇ ¿ä¼Ò ¼ø¼­´Â vxl_id¿Í °ü°è¾ø´Ù.
+      VOXEL_ID_TYPE slot_start_pos = (slotX * Y_D + slotY) * S_W * S_H;//ï¿½ï¿½ï¿½ï¿½: type_bufferï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ vxl_idï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½.
       SLOT_BUFFER_TYPE n_pixels_in_curr_slot = *(slot_buf + slot_start_pos + 0);
       for (int p = 0; p < n_pixels_in_curr_slot; p++)
       {
-        VOXEL_ID_TYPE newpxl_pos = VOXEL_ID_TYPE(slot_start_pos + (p + 1) * S_W);// (p+1): 0¹øÂ°´Â slot infoÀÌ¹Ç·Î Á¦¿Ü.
+        VOXEL_ID_TYPE newpxl_pos = VOXEL_ID_TYPE(slot_start_pos + (p + 1) * S_W);// (p+1): 0ï¿½ï¿½Â°ï¿½ï¿½ slot infoï¿½Ì¹Ç·ï¿½ ï¿½ï¿½ï¿½ï¿½.
         SLOT_BUFFER_TYPE pxl_type = *(slot_buf + newpxl_pos + 0);
         if (pxl_type & _typeByte)
         {
@@ -1155,33 +1210,25 @@ int  STomoSh_INT3::triVoxel(
 
 void  STomoSh_INT3::Calculate(void)
 {
+  FLOAT32 pairedVo = vm_info.Vo;
+  FLOAT32 pairedVss = vm_info.Vss;
   vm_info.Init();
+  vm_info.Vo = pairedVo;
+  vm_info.Vss = pairedVss;
 
   int X_D = voxel_info.x_dim;
   int Y_D = voxel_info.y_dim;
   int S_W = voxel_info.nSlotCapacityWidth;
   int S_H = voxel_info.nSlotCapacityHeight;
-  for (int slotX = 0; slotX < X_D; slotX++)
+  //Empty slots contribute 0 to every sumType, so iterate only occupied slots. dirtySlots now
+  //holds voxelize + bed slots; sort ascending to keep the float accumulation order identical to
+  //the old row-major full-grid scan.
+  std::sort(voxel_info.dirtySlots.begin(), voxel_info.dirtySlots.end());
+  for (size_t i = 0; i < voxel_info.dirtySlots.size(); i++)
   {
-    for (int slotY = 0; slotY < Y_D; slotY++)
-    {
-
-      #ifdef _DEBUG
-      if(slotX == 2 && slotY == 2)
-      {
-        int k = 1;
-      }
-      #endif
-
-      VOXEL_ID_TYPE slotID = slotX * Y_D + slotY;
-      SLOT_BUFFER_TYPE* curr_Pxl_slot = voxel_info.SlotBuf_108f + slotID * S_W * S_H;//current slot
+      SLOT_BUFFER_TYPE* curr_Pxl_slot = voxel_info.SlotBuf_108f + voxel_info.dirtySlots[i] * S_W * S_H;//current slot
 
       SLOT_BUFFER_TYPE slot_len = *(curr_Pxl_slot + 0);
-      SLOT_SUM_TYPE slot_Vo  = voxel_info.SlotVo_32i[slotID];
-      SLOT_SUM_TYPE slot_Vss = voxel_info.SlotVss_32i[slotID];
-
-      vm_info.Vo  +=  slot_Vo;
-      vm_info.Vss +=  slot_Vss;
 
       vm_info.Va  += sumType(S_W, slot_len, curr_Pxl_slot, typeAl);
       vm_info.Vb  += sumType(S_W, slot_len, curr_Pxl_slot, typeBe);
@@ -1192,7 +1239,6 @@ void  STomoSh_INT3::Calculate(void)
       //consider bed structure
       vm_info.Vbed += sumType(S_W, slot_len, curr_Pxl_slot, typeBed) * printer_info.BedThickness;
       //vm_info.Vss +=  vm_info.Vbed;
-    }
   }
 
   #if 0
@@ -1239,7 +1285,7 @@ TPVector   STomoSh_INT3::GetSSPixels(bool _bUseExplicitSS)
         SLOT_BUFFER_TYPE p_z    = *(curr_Pxl_slot + (p + 1) * S_W + 1);
 
 #ifdef _USE_BRIEF_SLOT_PAIRING
-        //ÀÌ¹öÀüÀº NV, SS ¸ðµÎ Á¤º¸°¡ ÀÖÀ½.
+        //ï¿½Ì¹ï¿½ï¿½ï¿½ï¿½ï¿½ NV, SS ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½.
         if (p_type & typeSSB) { ss_start_z = p_z; }//start of SS pxls.
         if (p_type & typeSSA) { ss_end_z = p_z; }//shadow acceptor
 #else
@@ -1282,7 +1328,7 @@ inline float dist2D(int x0 , int y0 , int x1 , int y1)
   return sqrt( ((float(x0) - x1)*(float(x0) - x1) + (float(y0) - y1)*(float(y0) - y1)));
 }
 
-bool  STomoSh_INT3::IsBedCandidate(int  X , int  Y)//(X,Y)·Î ºÎÅÍ ÃÖ´Ü °Å¸®¿¡  ak, be, SSA Á¡ÀÌ ÀÖ´ÂÁö È®ÀÎÇÑ´Ù. ÁÖÀÇ: type=0ÀÎ ³ëÀÌÁî°¡ ³¢¾î ÀÖÀ½.
+bool  STomoSh_INT3::IsBedCandidate(int  X , int  Y)//(X,Y)ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½Ö´ï¿½ ï¿½Å¸ï¿½ï¿½ï¿½  ak, be, SSA ï¿½ï¿½ï¿½ï¿½ ï¿½Ö´ï¿½ï¿½ï¿½ È®ï¿½ï¿½ï¿½Ñ´ï¿½. ï¿½ï¿½ï¿½ï¿½: type=0ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½î°¡ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½.
 {
   int X_D = voxel_info.x_dim;
   int Y_D = voxel_info.y_dim;
@@ -1338,30 +1384,48 @@ void  STomoSh_INT3::GenerateBed(void)
 
   int ss_start_z=-1, ss_end_z=-1;
   FLOAT32 pxl[3] = {}, nrm[3] = {};
-  for (int slotX = 0; slotX < X_D; slotX++)
+
+  //The bed only appears within BedOuterBound of the object footprint, so far-away empty
+  //slots (the vast majority) can never be candidates and IsBedCandidate would reject them.
+  //Restrict the scan to the occupied-slot bounding box grown by the outer bound. This is a
+  //strict superset of every candidate slot -> bit-identical to the full-grid scan, but for a
+  //small mesh it turns O(X_D*Y_D * radius^2) into O(footprint * radius^2).
+  if (voxel_info.dirtySlots.empty()) return;//no object voxels -> no bed
+  int minX = X_D, minY = Y_D, maxX = -1, maxY = -1;
+  for (size_t i = 0; i < voxel_info.dirtySlots.size(); i++)
   {
-    for (int slotY = 0; slotY < Y_D; slotY++)
+    int sx = int(voxel_info.dirtySlots[i] / Y_D);
+    int sy = int(voxel_info.dirtySlots[i] % Y_D);
+    if (sx < minX) minX = sx;  if (sx > maxX) maxX = sx;
+    if (sy < minY) minY = sy;  if (sy > maxY) maxY = sy;
+  }
+  const int bedMargin = int(printer_info.BedOuterBound) + 1;//ceil(BedOuterBound)+safety
+  const int bx0 = max(minX - bedMargin, 0),  bx1 = min(maxX + bedMargin + 1, X_D);
+  const int by0 = max(minY - bedMargin, 0),  by1 = min(maxY + bedMargin + 1, Y_D);
+  for (int slotX = bx0; slotX < bx1; slotX++)
+  {
+    for (int slotY = by0; slotY < by1; slotY++)
     {
 
-      //¹Ù´Ú¸éÀÇ al, be, SSA ÇÈ¼¿ ±âÁØ dilation. nPxl = 0ÀÎ Á¡¿¡ ´ëÇØ¼­¸¸.
+      //ï¿½Ù´Ú¸ï¿½ï¿½ï¿½ al, be, SSA ï¿½È¼ï¿½ ï¿½ï¿½ï¿½ï¿½ dilation. nPxl = 0ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ø¼ï¿½ï¿½ï¿½.
       SLOT_BUFFER_TYPE* curr_Pxl_slot = voxel_info.SlotBuf_108f + (slotX * Y_D + slotY) * S_W * S_H;//current slot
       SLOT_BUFFER_TYPE  slot_len = *(curr_Pxl_slot + 0);
 
       bool bPossibleBedPosition = false;
-      if( slot_len ==0) { bPossibleBedPosition = true; }//¾Æ¹«°Íµµ ¾ø´Â °÷¿¡ ´ëÇØ¼­ ¿ì¼± ¼øÀ§.
+      if( slot_len ==0) { bPossibleBedPosition = true; }//ï¿½Æ¹ï¿½ï¿½Íµï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ø¼ï¿½ ï¿½ì¼± ï¿½ï¿½ï¿½ï¿½.
       else
       {
         int p = slot_len-1;// pxl on bottom. 
         SLOT_BUFFER_TYPE p_z    = *(curr_Pxl_slot + (p + 1) * S_W + 1);
         SLOT_BUFFER_TYPE p_type = *(curr_Pxl_slot + (p + 1) * S_W + 0);
         if( p_z == 0)     {
-          if(p_type == typeNVA || p_type == typeVo || p_type == typeVss) bPossibleBedPosition = true;//¿¹¿Ü: nvBÇÈ¼¿Àº »ó°ü¾øÀ½.
+          if(p_type == typeNVA || p_type == typeVo || p_type == typeVss) bPossibleBedPosition = true;//ï¿½ï¿½ï¿½ï¿½: nvBï¿½È¼ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½.
 
-          if((p_type & typeAl) || (p_type & typeBe) || (p_type & typeSSA) || (p_type & typeSS)) //¹Ù´Ú¿¡ al, be, ssa ÇÈ¼¿ÀÌ ÀÖ´Â °÷Àº °è»êÇÏ¸é ¾ÈµÊ.
+          if((p_type & typeAl) || (p_type & typeBe) || (p_type & typeSSA) || (p_type & typeSS)) //ï¿½Ù´Ú¿ï¿½ al, be, ssa ï¿½È¼ï¿½ï¿½ï¿½ ï¿½Ö´ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Ï¸ï¿½ ï¿½Èµï¿½.
           {   bPossibleBedPosition = false; }
 
           if( printer_info.BedType == enumBedType::ebtRaft && ((p_type & typeBe) || (p_type & typeSSA )))
-          {bPossibleBedPosition = true;}//·¡ÇÁÆ®ÀÏ ¶§´Â beta¾Æ·¡ ÇÑ Ãþ ´õ ±ò¾ÆÁØ´Ù.
+          {bPossibleBedPosition = true;}//ï¿½ï¿½ï¿½ï¿½Æ®ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ betaï¿½Æ·ï¿½ ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Ø´ï¿½.
         }
       }
 
@@ -1369,7 +1433,7 @@ void  STomoSh_INT3::GenerateBed(void)
       if(bPossibleBedPosition && IsBedCandidate( slotX, slotY))
       {
         pxl[0] = slotX; pxl[1] = slotY;
-        pxl[2] = 1;//ÀÌ°Å ¾øÀ¸¸é V_bed=0ÀÌ µÊ.
+        pxl[2] = 1;//ï¿½Ì°ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ V_bed=0ï¿½ï¿½ ï¿½ï¿½.
         voxel_info.SetBit( voxel_info.SlotBuf_108f, pxl, nrm, typeBed);       
       }
     }
