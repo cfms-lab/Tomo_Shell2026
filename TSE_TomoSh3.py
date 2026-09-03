@@ -2,8 +2,8 @@
 # TSE_TomoSh3.py
 #   [원본] 2025 한국섬유공학회지 발표 코드:
 #          "뼈대 구조와 군집 분석을 이용한 사용자 정의 삼차원 인체 계측" (TSE.2025.62.346)
-#   [★ NEW (this work)] 표시 부분은 이번 확장 연구에서 새로 추가/수정한 것.
-#          상세 내용·검증은 draft_sh2/(분할 개선), draft_sh3/(강건 계측) 참조.
+#   [★ NEW (this work)] 표시 부분은 발표 이후 새로 추가/수정한 것.
+#          (분할 개선·강건 계측에 관한 후속 논문은 준비 중이며, 게재 후 상세 자료를 공개할 예정.)
 #=============================================================================
 import os
 import numpy as np
@@ -17,7 +17,7 @@ from cfms_bodym.bodym_functions import BodyPart
 from cfms_meshcut.cut_function import StartTimer, EndTimer
 
 # ────────────────────────────────────────────────────────────────────────────
-# ★ NEW (this work) : 강건/개선 파이프라인 스위치  (draft_sh3)
+# ★ NEW (this work) : 강건/개선 파이프라인 스위치
 #   True  : BodyMeasureRobust + bone_p2bdist2 (실패 격리 R1 + 허위 둘레선 기각 R2
 #           + 비다양체 허용 길이 R4 + 연속 패널티 분할 bone_p2bdist2)
 #   False : 원본 baseline (BodyMeasure + bone_p2bdist) — 발표본 재현/전후 비교용

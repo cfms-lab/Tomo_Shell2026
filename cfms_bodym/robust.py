@@ -22,7 +22,7 @@ improvements identified for the TSE_TomoSh3 body-measurement pipeline:
   (A candidate R3 -- enlarging the breast-point curvature radius from 0.01 cm to
    a body-scale value -- was tested and REJECTED: the larger radius over-smooths
    the sharp nipple and moves the detected point to the torso side, so the
-   original radius is retained. See the sensitivity figure in draft_sh3.)
+   original radius is retained.)
 
 Usage:
     from cfms_bodym.robust import BodyMeasureRobust

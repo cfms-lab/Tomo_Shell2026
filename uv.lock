@@ -615,7 +615,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tomo-shell2026-dev"
+name = "tomo-shell2026"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

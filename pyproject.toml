@@ -1,7 +1,7 @@
 [project]
-name = "tomo-shell2026-dev"
+name = "tomo-shell2026"
 version = "0.1.0"
-description = "Add your description here"
+description = "Support-structure volume prediction for 3D printing (solid & shell meshes, CPU/CUDA)"
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [

@@ -156,6 +156,6 @@ BUGREPORT_*.md, TODO_*.md, PERF_*.md                    # DLL 수정 이력(정�
 
 - `cfms-lab/Tomo_Shell2025` — 이 코드의 원본(2025 발표 당시 버전)
 - `cfms-lab/tomoNV` — solid 메쉬용 지지구조 단층촬영(초기 버전)
-- 라이선스: C++/CUDA 엔진 소스(`cfms_tomo/Tomo_Shell_vc_src/`)는 **GPL v3** 입니다. (Python 코드 전체에 적용할 라이선스는 루트에 `LICENSE` 파일로 명시해 주세요 — 현재 없음)
+- 라이선스: **GPL-3.0** (루트 `LICENSE`). C++/CUDA 엔진 소스(`cfms_tomo/Tomo_Shell_vc_src/LICENSE`)도 동일합니다.
 
 문의: 설인환, 국립금오공과대학교 소재디자인공학과
