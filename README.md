@@ -1,117 +1,161 @@
-# Tomo_Shell2025 (확장 리포지토리)
+# Tomo_Shell2026
 
-> ⚠️ **이 리포지토리는 원본 GitHub 리포지토리( `cfms-lab/Tomo_Shell2025` )와 별개입니다.**
-> 원본에 **새로운 연구(draft_sh2, draft_sh3)** 를 추가한 확장본입니다.
+**3D 프린팅 지지구조 부피 예측 — solid & shell 메쉬, CPU/CUDA**
+Support-structure volume prediction for 3D printing (solid & shell meshes, CPU/CUDA) — latest public release of the Tomo series.
 
----
+얇은 쉘 구조의 인체 마네킨 메쉬와 일반적인 닫힌(solid) 메쉬에 대해 **3D 프린팅 최적 배향**과 **지지구조 부피·필라멘트 소모량**을 예측하는 "지지구조 단층촬영(support structure tomography)" 코드와, 이를 위한 **인체 메쉬 분할·계측** 코드를 담고 있습니다. 2025년 한국섬유공학회지에 발표한 세 편의 논문 코드가 그대로 들어 있고, 발표 이후 정정·개선한 부분은 소스 안에 `★ NEW` 주석으로 표시되어 있습니다.
 
-## 📌 가장 먼저 읽어 주세요 — 무엇이 "발표본"이고 무엇이 "신규"인가
-
-| 구분 | 위치 | 성격 |
-|------|------|------|
-| **① 발표된 논문 (2025 한국섬유공학회지)** | 루트의 `TSE_TomoSh1.*`, `TSE_TomoSh2.*`, `TSE_TomoSh3.*` 및 `cfms_*` 라이브러리 | **이미 학회지에 발표·게재된 원본 코드/논문** |
-| **② 이번에 새로 개발한 연구 (this work)** | **`draft_sh2/`**, **`draft_sh3/`** 폴더 | **아직 미발표. 이번 리포지토리에서 새로 개발한 신규 원고·코드·데이터** |
-| **③ 신규 개발 코드 표시** | 소스코드 내 **`★ NEW (this work)`** 주석 | 발표본 파일 안에 추가/수정된 신규 부분은 이 주석으로 강조 |
-
-즉,
-- **루트의 `tomosh*.*` (= `TSE_TomoSh*.py/.pdf`) 는 2025년 섬유공학회지에 발표된 것**입니다.
-- **`draft_sh2`, `draft_sh3` 는 이번에 새로 개발한 것**입니다.
-- 발표본 스크립트(`TSE_TomoSh?.py`) 안에서 새로 손댄 부분은 **`★ NEW (this work)`** 주석으로 표시해 두었습니다.
+> - 이 리포지토리는 `cfms-lab/Tomo_Shell2025`(원본)의 후속 **공개판**입니다. 개발은 별도의 비공개 리포지토리에서 진행하며, 이곳에는 검증된 스냅샷만 올립니다.
+> - 논문 초안(미발표 원고) 폴더는 이 공개판에 **포함되어 있지 않습니다.** 관련 코드(`BodyMeasureRobust`, `bone_p2bdist2` 등)만 포함되며, 상세 내용은 논문 게재 후 공개합니다.
 
 ---
 
-## ① 발표된 논문 (루트, 2025 한국섬유공학회지)
+## 1. 빠른 시작 (Windows, 수업·실습용)
 
-설치(공통): Python 3.10/3.11/3.12 에서
-```
+| 항목 | 요구 사항 |
+|---|---|
+| OS | Windows 10/11 x64 (C++ 계산 엔진이 `cfms_tomo/Tomo_Shell2026.dll` 로 미리 빌드되어 있음) |
+| Python | **3.10 권장** (`.python-version` = 3.10.20). 3.11/3.12도 동작. 3.13 이상은 일부 패키지 설치 실패 가능 |
+| GPU | 선택 사항. CUDA 모드는 NVIDIA GPU + CUDA 13.3 런타임 필요(RTX 50xx까지 검증). GPU가 없으면 CPU 모드로 동작 |
+
+```powershell
+# 1) 받기
+git clone https://github.com/cfms-lab/Tomo_Shell2026.git
+cd Tomo_Shell2026
+
+# 2) 가상환경 만들기 (폴더 이름은 .venv 로 — pics/regen_pics.ps1 이 이 경로를 사용)
+python -m venv .venv
+.\.venv\Scripts\activate
+
+# 3) 패키지 설치
 pip install -r "requirements(python3.10).txt"
+
+# 4) 첫 실행: 쉘 메쉬(바디스) 최적 배향 탐색
+python TSE_TomoSh1.py
 ```
 
-### I. solid mesh의 최적 배치
+실행이 끝나면 3D 그래프(matplotlib) 창 또는 polyscope 뷰어가 열립니다. 창이 뜨지 않는 환경(원격, CI)에서는 `TOMO_NO_SHOW=1` 을 설정하고 `TOMO_PLOT3D_SAVE=파일명.png` 로 그림만 저장할 수 있습니다(아래 §4 참고).
 
-이 프로젝트는 얇은 쉘(shell) 메쉬뿐 아니라 **일반적인 닫힌(solid, watertight) 메쉬도 지원**합니다.
-`TSE_TomoSh1.py`는 입력 메쉬의 watertight 여부로 `bShellMesh`를 자동 판정하므로(★ NEW),
-solid 메쉬를 넣으면 별도 설정 없이 같은 파이프라인으로 최적 프린팅 배향을 탐색합니다.
-아래는 Stanford Bunny(`MeshData/Bunny_69k.stl`, 약 69k 삼각형)의 예입니다
-(재현: `.\pics\regen_pics.ps1 solid1`).
+---
+
+## 2. 세 가지 예제 스크립트 (2025 한국섬유공학회지 발표 코드)
+
+세 스크립트는 모두 **파일 상단의 변수로 입력 메쉬를 고르는 방식**입니다(주석 처리된 줄 중 하나를 살리면 됩니다). 명령행 인자는 받지 않습니다.
+
+### `TSE_TomoSh1.py` — 얇은 쉘 구조 마네킨 메쉬의 3D프린팅 필라멘트 소모량 예측
+Filament Usage Prediction in 3D Printing of Thin-Shell-Structured Manikin Mesh
+· [한국섬유공학회지 2025-10, TSE.2025.62.319](http://dx.doi.org/10.12772/TSE.2025.62.319)
+
+- 입력: `DataSet` 변수 (`MeshData/(1)sphere.ply` ~ `(7)bodice5.ply`). 환경변수 `TOMO_MESH_FILE` 로도 지정 가능.
+- `theta_YP = 0` 이면 지정한 자세 하나만 계산, `theta_YP = 5` 이면 5° 간격으로 전체 자세를 탐색해 최적 배향을 찾습니다.
+- 프린터 조건(벽 두께, 채움률, 임계각 60°, 래프트 등)은 `(2) specify 3D printer's g-code conditions` 블록에서 수정합니다.
+
+![sh1](pics/tomo_sh1.png)
+
+**solid 메쉬도 그대로 지원합니다.** 입력 메쉬가 watertight(닫힌 면)인지 여부로 `bShellMesh` 를 자동 판정하므로(★ NEW), Stanford Bunny 같은 일반 메쉬를 넣으면 별도 설정 없이 같은 파이프라인이 돌아갑니다.
+
+```powershell
+$env:TOMO_MESH_FILE = 'MeshData/Bunny_69k.stl'   # 약 69k 삼각형
+python TSE_TomoSh1.py
+```
 
 ![solid1](pics/tomo_solid1.png)
 
-solid mesh 최적 배향(TomoNV) 관련 참고문헌:
+### `TSE_TomoSh2.py` — 뼈대 구조와 군집 분석을 이용한 인체 마네킨의 최적 3D프린팅
+Optimal 3D Printing of Human Manikin Using Bone Structure and Cluster Analysis
+· [한국섬유공학회지 2025-12, TSE.2025.62.337](http://dx.doi.org/10.12772/TSE.2025.62.337)
+
+- 입력: `filename` 변수 (`MeshData/SK6th_*.gltf`, `masha1_*.gltf` — 뼈대(skeleton)가 포함된 glTF).
+- CUDA 사용 여부: 환경변수 `TOMO_USE_CUDA=1` / `0` (기본값 CPU).
+- 그 밖의 슬라이싱 옵션도 환경변수로 바꿀 수 있습니다: `TOMO_THETA_YP`(탐색 각도 간격, 기본 10°), `TOMO_SHELL_MESH`, `TOMO_SHELL_THICKNESS`, `TOMO_BED_TYPE`.
+- 발표본과 동일한 코드입니다(★ NEW 없음).
+
+![sh2](pics/tomo_sh2.png)
+
+### `TSE_TomoSh3.py` — 뼈대 구조와 군집 분석을 이용한 사용자 정의 삼차원 인체 계측
+User-Defined Three-Dimensional Human Body Measurement Using Bone Structure and Cluster Analysis
+· [한국섬유공학회지 2025, TSE.2025.62.346](http://dx.doi.org/10.12772/TSE.2025.62.346)
+
+- 입력: `gltfLoader(filename=..., max_height=...)` — `max_height` 는 SizeKorea 키(mm).
+- 환경변수 `TSE_SH3_USE_ROBUST` (기본 `1`): `1` 이면 개선된 강건 계측 파이프라인(`BodyMeasureRobust` + `bone_p2bdist2`), `0` 이면 발표본 그대로(baseline)를 실행합니다. 두 결과를 나란히 비교할 수 있습니다.
+
+![sh3](pics/tomo_sh3.png)
+
+---
+
+## 3. 발표본 대비 변경 사항 (`★ NEW` 표시)
+
+발표본 코드는 원형을 유지하고, 새 항목은 **이름을 달리해서**(`*_v2`, `BodyMeasureRobust`, `bone_p2bdist2/3`, `bone_skinweight`) 추가했습니다. 소스에서 `★ NEW` 를 검색하면 모두 찾을 수 있습니다.
+
+| 위치 | 변경 내용 |
+|---|---|
+| `TSE_TomoSh1.py` | PLA 밀도를 측정값 0.001121 g/mm³ 로 정정(논문 Table 1의 0.0121은 오타). `bShellMesh` 를 watertight 여부로 자동 판정 |
+| `cfms_meshcut/cut_math.py`, `cut_function.py` | 점-뼈대 거리 분할의 연속 법선 패널티 `point_to_bone_dist_v2`, `cutType.bone_p2bdist2 / bone_p2bdist3 / bone_skinweight` (고해상도 메쉬에서 둘레선 검출이 깨지는 문제 개선) |
+| `cfms_bodym/robust.py` | `BodyMeasureRobust`: 분할 실패 격리, 허위 둘레선 기각, 비다양체 허용 길이 측정 |
+| `cfms_tomo/Tomo_Shell2026.dll`, `Tomo_Shell_vc_src/` | CUDA 13.3 + RTX 50xx(sm_120)로 재빌드. int16 오버플로로 지지구조 부피가 음수·축소되던 문제 수정(`BUGREPORT_2026-07-03_INT16_vss_overflow.md`), CUDA 슬롯 삽입 경합·비결정성 수정(`TODO_CUDA_issues_2026-07-04.md`). 정확성 수정 후 속도 회귀는 `PERF_REGRESSION_2026-07-05_correctness_fix.md` 참고 |
+
+> 주의: 2026-07-03 이전 DLL로 계산한 지지구조 부피 값은 int16 래핑으로 오염되어 있었습니다. 논문 수치를 재현하려면 현재 DLL로 다시 계산하세요.
+
+---
+
+## 4. 그림 재생성과 환경변수
+
+`pics/` 의 네 그림은 프로젝트 루트에서 다음으로 다시 만들 수 있습니다(`.venv\Scripts\python.exe` 사용).
+
+```powershell
+.\pics\regen_pics.ps1          # 네 장 모두
+.\pics\regen_pics.ps1 sh2      # sh1 | sh2 | sh3 | solid1 중 하나
+```
+
+| 환경변수 | 뜻 |
+|---|---|
+| `TOMO_NO_SHOW=1` | 창을 띄우지 않음(headless) |
+| `TOMO_MESH_FILE` | `TSE_TomoSh1.py` 입력 메쉬 교체 |
+| `TOMO_PLOT3D_SAVE`, `TOMO_PLOT3D_DPI` | `TSE_TomoSh1.py` 3D 그래프를 PNG로 저장 |
+| `TOMO_SCREENSHOT`, `TOMO_SCREENSHOT_W/H`, `TOMO_CAMERA_*`, `TOMO_GROUND_PLANE`, `TOMO_SSAA` | polyscope 화면 캡처와 카메라(값 설명: `pics/camera_settings.md`) |
+| `TOMO_USE_CUDA`, `TOMO_THETA_YP`, `TOMO_SHELL_MESH`, `TOMO_SHELL_THICKNESS`, `TOMO_BED_TYPE` | `TSE_TomoSh2.py` 슬라이싱 옵션(CUDA 사용, 탐색 각도 간격, 쉘 모드·두께, 바닥구조) |
+| `TSE_SH3_USE_ROBUST` | `TSE_TomoSh3.py` 강건 파이프라인 / baseline 전환 |
+
+---
+
+## 5. 폴더 구조
+
+```
+TSE_TomoSh1.py / .pdf        # 쉘·solid 메쉬 최적 배향, 필라멘트 소모량 (논문 1)
+TSE_TomoSh2.py / .pdf        # 뼈대·군집 분석 기반 마네킨 최적 프린팅 (논문 2)
+TSE_TomoSh3.py / .pdf        # 뼈대 기반 사용자 정의 인체 계측 (논문 3)
+cfms_tomo/                   # 지지구조 단층촬영 엔진: Python 래퍼 + Tomo_Shell2026.dll
+  Tomo_Shell_vc_src/         #   C++/CUDA 소스 (Visual Studio 솔루션, cpu_src, cuda_src)
+  shell_test/                #   쉘 모드 테스트·검증 스크립트
+cfms_meshcut/                # 메쉬 분할 (k-means, k-medoids, 뼈대 거리 등)
+cfms_bodym/                  # 인체 계측 (BodyMeasure, BodyMeasureRobust)
+highfestiva_gltfLoader/      # glTF(뼈대 포함) 로더
+MeshData/                    # 예제 메쉬: 구·반구·마네킨·바디스(.ply), SizeKorea 아바타(.gltf), Bunny_69k.stl
+pics/                        # README 그림과 재생성 스크립트
+requirements(python3.10).txt # pip 설치 목록 (권장)
+requirements.txt, conda.yaml, pyproject.toml, uv.lock   # 대안 환경 정의
+BUGREPORT_*.md, TODO_*.md, PERF_*.md                    # DLL 수정 이력(정확성·성능)
+```
+
+---
+
+## 6. 참고문헌
+
+지지구조 단층촬영(TomoNV)과 마네킨 3D 프린팅 관련 선행 연구:
 
 1. Jin Young Jung, Seonkoo Chee and In Hwan Sul, "Automatic Segmentation and 3D Printing of A-shaped Manikins using a Bounding Box and Body-feature Points", *Fashion and Textiles*, 8(13), pp.1-21, (2021) <a href="https://dx.doi.org/10.1186/s40691-021-00255-8" target="_blank" rel="noopener">doi:10.1186/s40691-021-00255-8</a>
 2. Jin Young Jung, Seonkoo Chee, and In Hwan Sul, "Support structure tomography using per-pixel signed shadow casting in human manikin 3D printing", *Fashion and Textiles*, (2022) <a href="https://dx.doi.org/10.1186/s40691-022-00290-z" target="_blank" rel="noopener">doi:10.1186/s40691-022-00290-z</a>
 3. Jin Young Jung, Seonkoo Chee, and In Hwan Sul, "Prediction of optimal 3D printing orientation using vertically sparse voxelization and modified support structure tomography", *International Journal of Clothing Science and Technology*, 35(5), pp.799-832, (2023) <a href="https://dx.doi.org/10.1108/IJCST-04-2023-0041" target="_blank" rel="noopener">doi:10.1108/IJCST-04-2023-0041</a>
 4. Jae Ryoung Kim and In Hwan Sul, "Fast Prediction of 3D Printing Optimal Orientation Using General-Purpose Graphic Card Unit Calculation", *3D Printing and Additive Manufacturing*, 13(1), pp.50-62, (2026) <a href="https://dx.doi.org/10.1089/3dp.2024.0165" target="_blank" rel="noopener">doi:10.1089/3dp.2024.0165</a>
 
-### II. shell 메쉬의 최적 배치 및 분할
-
-#### `TSE_TomoSh1.py` — 얇은 쉘 구조 마네킨 메쉬의 3D프린팅 필라멘트 소모량 예측
-Filament Usage Prediction in 3D Printing of Thin-Shell-Structured Manikin Mesh
-· [한국섬유공학회지 2025-10, TSE.2025.62.319](http://dx.doi.org/10.12772/TSE.2025.62.319)
-![sh1](pics/tomo_sh1.png)
-
-#### `TSE_TomoSh2.py` — 뼈대 구조와 군집 분석을 이용한 인체 마네킨의 최적 3D프린팅
-Optimal 3D Printing of Human Manikin Using Bone Structure and Cluster Analysis
-· [한국섬유공학회지 2025-12, TSE.2025.62.337](http://dx.doi.org/10.12772/TSE.2025.62.337)
-![sh2](pics/tomo_sh2.png)
-
-#### `TSE_TomoSh3.py` — 뼈대 구조와 군집 분석을 이용한 사용자 정의 삼차원 인체 계측
-User-Defined Three-Dimensional Human Body Measurement Using Bone Structure and Cluster Analysis
-· [한국섬유공학회지 2025, TSE.2025.62.346](http://dx.doi.org/10.12772/TSE.2025.62.346)
-![sh3](pics/tomo_sh3.png)
-
-> 참고
-> - `open3d` 는 Python 3.12까지 지원합니다(3.14에서 설치 실패 가능).
-> - GPU(쉘) 버전: 원본은 NVIDIA 40xx에서 테스트되었고, 본 확장본에서 **CUDA 13.3 + RTX 50xx(Blackwell, sm_120)** 로 재빌드·검증하였습니다(아래 `cfms_tomo` 참고).
+이 리포지토리의 코드를 사용하실 때는 위 §2의 해당 논문(TSE.2025.62.319 / .337 / .346)을 인용해 주세요.
 
 ---
 
-## ② 이번에 새로 개발한 연구 — `draft_sh2/`, `draft_sh3/` (미발표, this work)
+## 7. 관련 리포지토리와 라이선스
 
-두 폴더는 **위 `TSE_TomoSh3` 인체 계측 파이프라인을 개선**한 두 편의 **신규 원고(논문 초안)** 와 그 재현 코드·그림·표를 담고 있습니다. 각 폴더는 `xelatex` 로 컴파일되는 독립 원고입니다.
+- `cfms-lab/Tomo_Shell2025` — 이 코드의 원본(2025 발표 당시 버전)
+- `cfms-lab/tomoNV` — solid 메쉬용 지지구조 단층촬영(초기 버전)
+- 라이선스: C++/CUDA 엔진 소스(`cfms_tomo/Tomo_Shell_vc_src/`)는 **GPL v3** 입니다. (Python 코드 전체에 적용할 라이선스는 루트에 `LICENSE` 파일로 명시해 주세요 — 현재 없음)
 
-### `draft_sh2/` — 법선 연속성 기반 점-뼈대 거리 개선을 통한 삼차원 인체 메쉬 분할의 강건화
-- **무엇:** 인체를 6부위로 나누는 점-뼈대 거리(point-to-bone) 군집의 **이진 법선 패널티**가 고해상도 메쉬에서 파편화를 일으켜 둘레선 검출이 실패하는 문제를, **연속(continuous) 법선 패널티**로 개선. 추가로 연결성 평활화·스킨 가중치 분할을 비교.
-- **신규 코드:** `cfms_meshcut/cut_math.py`의 `point_to_bone_dist_v2`, `cfms_meshcut/cut_function.py`의 `cutType.bone_p2bdist2 / bone_p2bdist3 / bone_skinweight` (원본 `point_to_bone_dist`·`bone_p2bdist`는 **전후 비교용으로 보존**).
-- **결과물:** `manuscript.tex/.pdf`, `references.bib`, `comparison_table.*`, `segmentation_quality.csv`, `figures/`, 재현 스크립트 `make_tables.py`, `make_screenshots.py`.
-
-### `draft_sh3/` — 자동 실패 탐지를 통한 강건한 뼈대 기반 삼차원 인체 계측 (국문)
-- **무엇:** 분할 실패 시 **허위 둘레선을 정상값처럼 보고**하거나 **임의 자세에서 크래시**하는 문제를 해결. 실패 격리(R1)·둘레선 유효성 검증(R2)·비다양체 허용 길이 측정(R4)을 도입.
-- **신규 코드:** `cfms_bodym/robust.py`의 **`BodyMeasureRobust`** 클래스 (원본 `cfms_bodym/__init__.py`의 `BodyMeasure`는 **전후 비교용으로 보존**).
-- **결과물:** `manuscript.tex/.pdf`(국문), `references.bib`, `reliability.csv`, `jump_stats.csv`, `figures/`, 재현 스크립트 `make_reliability.py`, `make_figures.py`, `make_jump_stats.py`.
-
-#### 신규 연구 재현 방법
-```bash
-# (논문 컴파일)  draft_sh2 또는 draft_sh3 폴더에서
-xelatex manuscript.tex && bibtex manuscript && xelatex manuscript.tex && xelatex manuscript.tex
-
-# (표/그림 재현)  프로젝트 conda 환경에서, 각 draft 폴더의 스크립트 실행
-python draft_sh2/make_tables.py
-python draft_sh2/make_screenshots.py
-python draft_sh3/make_reliability.py
-python draft_sh3/make_figures.py
-python draft_sh3/make_jump_stats.py
-```
-
----
-
-## ③ 발표본 스크립트 안의 "신규 개발 부분" 찾기
-
-발표본 `TSE_TomoSh?.py` 안에서 이번에 추가/수정한 부분은 모두 **`★ NEW (this work)`** 주석으로 표시했습니다. 예:
-
-- `TSE_TomoSh3.py` — **`USE_ROBUST` 스위치**: `True`로 두면 신규 강건 계측기(`BodyMeasureRobust` + 개선 분할 `bone_p2bdist2`)를, `False`로 두면 발표본 그대로(baseline)를 실행합니다. (전후 비교 가능)
-- `TSE_TomoSh1.py` — PLA 밀도(측정값 0.001121로 정정)와 `bShellMesh` 자동 판정(watertight)에 `★ NEW (this work)` 주석.
-
-> 라이브러리(`cfms_meshcut`, `cfms_bodym`)의 신규 항목도 동일하게 **함수/클래스 이름을 원본과 다르게**(`*_v2`, `BodyMeasureRobust`, `bone_p2bdist2/3`, `bone_skinweight`) 두어 원본을 훼손하지 않고 전후를 비교할 수 있게 하였습니다.
-
----
-
-## 폴더 구조 요약
-```
-TSE_TomoSh1/2/3.py , .pdf   # ① 발표된 논문(2025 TSE) — 루트
-cfms_tomo/ cfms_meshcut/ cfms_bodym/ highfestiva_gltfLoader/   # 라이브러리(발표본 + ★NEW 표시 신규)
-draft_sh2/                  # ② 신규: 분할(점-뼈대 거리) 개선 원고
-draft_sh3/                  # ② 신규: 강건 계측(실패 탐지) 원고(국문)
-MeshData/                   # 입력 메쉬(.gltf/.ply 등)
-```
+문의: 설인환, 국립금오공과대학교 소재디자인공학과
