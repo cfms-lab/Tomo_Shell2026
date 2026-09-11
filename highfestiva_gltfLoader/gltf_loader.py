@@ -155,13 +155,18 @@ def load_model(fname):
 
 		animations.append( Animation(samplers, channels, duration) )
 
-		for skin in gltf.skins:
-			joints = skin.joints # invariant through pose?
-			if skin.inverseBindMatrices is not None:
-				inverse_bind_matrices = load_accessor_data(gltf, gltf.accessors[skin.inverseBindMatrices])
-				inverse_bind_matrices = inverse_bind_matrices.reshape((-1, 16))
-				assert inverse_bind_matrices.dtype == np.float32
-				skins.append(Skin(joints, inverse_bind_matrices))
+	#★ NEW (this work): skin 읽기를 애니메이션 루프 밖으로 뺐다.
+	#원본은 이 루프가 `for anim in gltf.animations:` 안에 있어서, 애니메이션이 없는
+	#파일(MakeHuman 등에서 나온 정지 자세 리그)은 skins 가 비고 calc_joint_matrices()
+	#의 `assert len(skins)==1` 에서 죽었다. 애니메이션이 하나인 기존 파일은 전과 같이
+	#skin 을 하나 얻으므로 동작이 달라지지 않는다(둘 이상이면 원본은 중복 append 했다).
+	for skin in gltf.skins:
+		joints = skin.joints # invariant through pose?
+		if skin.inverseBindMatrices is not None:
+			inverse_bind_matrices = load_accessor_data(gltf, gltf.accessors[skin.inverseBindMatrices])
+			inverse_bind_matrices = inverse_bind_matrices.reshape((-1, 16))
+			assert inverse_bind_matrices.dtype == np.float32
+			skins.append(Skin(joints, inverse_bind_matrices))
 
 	ordered_node_indexes = order_nodes_root_first(gltf.nodes)
 	name = Path(fname).stem

@@ -31,6 +31,7 @@ class SkinAnimator:
 		#openGL rendering
 		self.bones = []
 		self.joints = []
+		self.rest_pose_ready = False #★ NEW (this work): 애니메이션 없는 파일의 정지 자세 계산 여부
 
 	def init_opt_skin_vertices(self):
 		for mesh in self.model.meshes:
@@ -53,7 +54,18 @@ class SkinAnimator:
 		## print('starting transform animation')
 
 	def play_animation(self, delta_time):
-		if not self.animation: return
+		#★ NEW (this work): 애니메이션이 없는 glTF(정지 자세)도 받는다.
+		#MakeHuman 등에서 나온 리그 메쉬는 skin 만 있고 animation 이 없다. 원본은
+		#여기서 곧장 돌아가 버려 calc_node_transforms() 가 한 번도 불리지 않고,
+		#그 결과 init_render() 가 node.transform 에서 AttributeError 를 낸다.
+		#정지 자세를 한 번만 계산해 두면 뼈대 위치가 잡힌다. 애니메이션이 있는
+		#기존 파일은 이 가지를 타지 않으므로 동작이 달라지지 않는다.
+		if not self.animation:
+			if not self.rest_pose_ready:
+				self.calc_node_transforms()
+				self.create_animated_primitives()
+				self.rest_pose_ready = True
+			return
 		if self.time < 0:			return
 
 		self.apply_animation()

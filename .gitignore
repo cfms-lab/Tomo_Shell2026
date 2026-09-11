@@ -13,7 +13,6 @@ requirements.clean.txt
 requirements_clean_report.txt
 used_imports.txt
 uv_installed*.txt
-tools/
 
 cfms_tomo/Tomo_Shell2025*
 cfms_tomo/Tomo_Shell_vc_src/Tomo_Shell2025*
@@ -401,7 +400,6 @@ FodyWeavers.xsd
 
 # VS Code files for those working on multiple tools
 .vscode/*
-!.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
@@ -429,3 +427,13 @@ FodyWeavers.xsd
 # TSE_TomoSh3.pdf
 
 
+
+.vscode/settings.json
+
+# 원고 빌드 중간 산출물 (draft_*/build). 사람이 고치지 않는다.
+draft_*/build/
+
+# polyscope/imgui 가 실행할 때마다 쓰는 창 상태. 사람이 고치는 것이 아니고
+# PC 마다 다르므로 추적하지 않는다(.vscode/settings.json 과 같은 이유, 626a3d7).
+.polyscope.ini
+imgui.ini

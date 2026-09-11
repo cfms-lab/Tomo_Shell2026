@@ -48,8 +48,14 @@ def point_to_bone_dist( point6f, bone6f):
 	return np.linalg.norm( np.subtract(  p, q))
 
 
-def point_to_bone_dist_v2( point6f, bone6f, normal_weight=2.0):
+def point_to_bone_dist_v2( point6f, bone6f, normal_weight=0.5):
 	#[NEW METHOD - improved] cutType.bone_p2bdist2
+	#★ 2026-09-11: default normal_weight (lambda) 2.0 -> 0.5. The peer review (P1-M4) noted that
+	#lambda=0.5 gave the ideal 6 components on M20/87k while the manuscript used 2.0. A sweep on
+	#the synthetic density series (draft_sh4/lambda_sweep_mh.csv) showed lambda=0.5 or 1.0 giving the
+	#fewest components in every one of the 18 (body, density) combinations and lambda>=2 in none, and
+	#every measurement value is identical for lambda in [0.5, 8] (draft_sh4/lambda_measure.csv).
+	#Results reported before 2026-09-11 used 2.0.
 	#Distance from a surface point (with its outward normal) to a bone segment p1-p2.
 	#The original point_to_bone_dist() applies a BINARY penalty (x1e3) whenever both bone
 	#tips lie on the +normal side, using a hard cosine threshold (1e-3). That discontinuity

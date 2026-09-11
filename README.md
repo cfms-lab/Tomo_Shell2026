@@ -90,11 +90,15 @@ User-Defined Three-Dimensional Human Body Measurement Using Bone Structure and C
 | 위치 | 변경 내용 |
 |---|---|
 | `TSE_TomoSh1.py` | PLA 밀도를 측정값 0.001121 g/mm³ 로 정정(논문 Table 1의 0.0121은 오타). `bShellMesh` 를 watertight 여부로 자동 판정 |
-| `cfms_meshcut/cut_math.py`, `cut_function.py` | 점-뼈대 거리 분할의 연속 법선 패널티 `point_to_bone_dist_v2`, `cutType.bone_p2bdist2 / bone_p2bdist3 / bone_skinweight` (고해상도 메쉬에서 둘레선 검출이 깨지는 문제 개선) |
-| `cfms_bodym/robust.py` | `BodyMeasureRobust`: 분할 실패 격리, 허위 둘레선 기각, 비다양체 허용 길이 측정 |
+| `cfms_meshcut/cut_math.py`, `cut_function.py` | 점-뼈대 거리 분할의 연속 법선 패널티 `point_to_bone_dist_v2`, `cutType.bone_p2bdist2 / bone_p2bdist3 / bone_skinweight` (고해상도 메쉬에서 둘레선 검출이 깨지는 문제 개선). 패널티 세기 λ 의 기본값은 **0.5** (2026-09-11, 이전 2.0; 계측값은 λ 0.5~8 에서 동일하고 연결성분은 0.5 에서 가장 적음) |
+| `cfms_bodym/robust.py` | `BodyMeasureRobust`: 분할 실패 격리, 둘레선 **두 단계 유효성 검증**(절단면에 닫힌 곡선이 있어야 하고, 그 곡선이 절단 원점을 감싸야 함 — 원 구현은 열린 곡선의 길이를 둘레로 보고할 수 있었음), 감김수(winding number) 판정 선택(`VALIDITY='winding'`), 채택되지 않은 항목의 사유 기록(`girth_status`: no_section / no_closed_loop / rejected), 비다양체 허용 길이 측정 |
+| `highfestiva_gltfLoader/` | 볼록껍질 씨앗의 초기화되지 않은 점 제거(배율 결함; 발표본 재현은 `TOMO_HULL_SEED_FIX=0`), 애니메이션이 없는 glTF(정지 자세 리그) 지원 |
+| `tools/` | 보조 스크립트(2026-09-11 부터 공개). `mh_avatar.py`: MakeHuman 합성 인체(.npz)를 분할·계측 파이프라인에 물리는 어댑터와 분할 통계(연결성분·오분류 면적·스킨 가중치 라벨 일치율). `makehuman_*.py`: MakeHuman/Blender 헤드리스 내보내기. `check_hull_variant.py`: 배율 결함 전후 비교. `build_tse_docx.py`: 원고 빌드(원고 폴더가 필요하므로 이 공개판에서는 단독 실행 대상이 아님) |
 | `cfms_tomo/Tomo_Shell2026.dll`, `Tomo_Shell_vc_src/` | CUDA 13.3 + RTX 50xx(sm_120)로 재빌드. int16 오버플로로 지지구조 부피가 음수·축소되던 문제 수정(`BUGREPORT_2026-07-03_INT16_vss_overflow.md`), CUDA 슬롯 삽입 경합·비결정성 수정(`TODO_CUDA_issues_2026-07-04.md`). 정확성 수정 후 속도 회귀는 `PERF_REGRESSION_2026-07-05_correctness_fix.md` 참고 |
 
 > 주의: 2026-07-03 이전 DLL로 계산한 지지구조 부피 값은 int16 래핑으로 오염되어 있었습니다. 논문 수치를 재현하려면 현재 DLL로 다시 계산하세요.
+>
+> 주의(2026-09-11): `tools/mh_avatar.py` 의 이전 판은 MakeHuman 좌표축을 자리바꿈(반사)해 법선이 모두 안쪽을 향했습니다. 그 판으로 얻은 합성 인체 분할 통계는 무효이며, 현재 판은 회전으로 축을 맞춥니다. 새 로더·어댑터를 쓸 때는 `tmesh.volume > 0` 을 먼저 확인하세요.
 
 ---
 
@@ -115,6 +119,7 @@ User-Defined Three-Dimensional Human Body Measurement Using Bone Structure and C
 | `TOMO_SCREENSHOT`, `TOMO_SCREENSHOT_W/H`, `TOMO_CAMERA_*`, `TOMO_GROUND_PLANE`, `TOMO_SSAA` | polyscope 화면 캡처와 카메라(값 설명: `pics/camera_settings.md`) |
 | `TOMO_USE_CUDA`, `TOMO_THETA_YP`, `TOMO_SHELL_MESH`, `TOMO_SHELL_THICKNESS`, `TOMO_BED_TYPE` | `TSE_TomoSh2.py` 슬라이싱 옵션(CUDA 사용, 탐색 각도 간격, 쉘 모드·두께, 바닥구조) |
 | `TSE_SH3_USE_ROBUST` | `TSE_TomoSh3.py` 강건 파이프라인 / baseline 전환 |
+| `TOMO_HULL_SEED_FIX` | glTF 로더의 배율 결함 수정 켜기/끄기(기본 `1`; `0` 이면 2025 발표본과 같은 옛 배율) |
 
 ---
 
@@ -130,6 +135,7 @@ cfms_tomo/                   # 지지구조 단층촬영 엔진: Python 래퍼 +
 cfms_meshcut/                # 메쉬 분할 (k-means, k-medoids, 뼈대 거리 등)
 cfms_bodym/                  # 인체 계측 (BodyMeasure, BodyMeasureRobust)
 highfestiva_gltfLoader/      # glTF(뼈대 포함) 로더
+tools/                       # 보조 스크립트: MakeHuman 어댑터·내보내기, 배율 결함 점검, 원고 빌드
 MeshData/                    # 예제 메쉬: 구·반구·마네킨·바디스(.ply), SizeKorea 아바타(.gltf), Bunny_69k.stl
 pics/                        # README 그림과 재생성 스크립트
 requirements(python3.10).txt # pip 설치 목록 (권장)

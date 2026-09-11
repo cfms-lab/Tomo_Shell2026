@@ -56,7 +56,30 @@ class gltfLoader:
 		chull = None
 		mat4x4 = None
 
-		verts = np.empty((1, 3), dtype=float)
+		#★ NEW (this work): 볼록껍질 씨앗에서 초기화되지 않은 점 하나를 뺀다.
+		#
+		#원본은 `np.empty((1, 3))` 으로 시작했다. np.empty 는 값을 채우지 않으므로
+		#그 자리에 남아 있던 메모리 값이 그대로 점 하나가 되어 껍질에 들어간다.
+		#그 점이 껍질의 z 범위를 늘리면 gltf_rotater.get_matrix() 의
+		#z_scale = max_height / z범위 가 작아져 메쉬 전체가 작게 놓인다.
+		#
+		#SizeKorea 네 메쉬에서 두 변형을 나란히 재 보았다(tools/check_hull_variant.py).
+		#기준 15항목의 절대 오차율 평균이 모두 낮아진다 — 즉 고치면 좋아진다.
+		#
+		#    F20/4k  4.15 -> 3.60 %      M20/4k   11.59 -> 8.47 %
+		#    F20/10k 4.90 -> 3.84 %      M20/87k  15.49 -> 13.70 %
+		#
+		#발표본(TSE_TomoSh1/2/3)의 게재 수치는 옛 동작으로 산출된 것이므로,
+		#TSE_SH3_USE_ROBUST 와 같은 방식으로 환경변수 스위치를 둔다. 기본값은
+		#고친 쪽이고, 게재본을 그대로 재현하려면 0 으로 둔다.
+		#
+		#    set TOMO_HULL_SEED_FIX=0    <- 발표본 재현 (옛 동작)
+		#
+		#세 번 반복 실행에서 값이 동일했으므로 이 기계에서는 옛 동작도 결정적이다.
+		#그러나 np.empty 의 내용은 보장되지 않으므로 다른 기계에서 같다는 보장이 없다.
+		seed_rows = 0 if os.environ.get(
+			"TOMO_HULL_SEED_FIX", "1").lower() not in ("0", "false", "no", "off") else 1
+		verts = np.empty((seed_rows, 3), dtype=float)
 		if Ani.skinned_primitives:#for data with texture
 			for p in Ani.skinned_primitives:
 				verts = np.append( verts, p.vertices, axis=0)
